@@ -21,7 +21,7 @@ SUPABASE_ANON   = os.getenv("SUPABASE_ANON")
 SUPABASE_SECRET = os.getenv("SUPABASE_SECRET")
 GEMINI_KEY      = os.getenv("GEMINI_KEY")
 
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
 
 # ── Models ───────────────────────────────────────────────
 class RegisterData(BaseModel):
