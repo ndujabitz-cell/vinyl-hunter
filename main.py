@@ -71,9 +71,12 @@ async def register(data: RegisterData):
             }
         )
     res = r.json()
+    print(f"SUPABASE STATUS: {r.status_code}")
+    print(f"SUPABASE RESPONSE: {res}")
     if r.status_code not in (200, 201) or "error" in res:
-        raise HTTPException(400, res.get("msg") or res.get("error_description") or "Errore registrazione")
-    return {"status": "ok", "message": "Controlla la tua email per confermare l'account"}
+        error_msg = res.get("msg") or res.get("error_description") or res.get("message") or str(res)
+        raise HTTPException(400, error_msg)
+    return {"status": "ok", "message": "Registrazione completata"}
 
 @app.post("/api/login")
 async def login(data: LoginData):
