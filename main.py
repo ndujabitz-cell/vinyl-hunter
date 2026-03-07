@@ -18,13 +18,14 @@ SUPABASE_URL    = os.getenv("SUPABASE_URL")
 SUPABASE_ANON   = os.getenv("SUPABASE_ANON")
 SUPABASE_SECRET = os.getenv("SUPABASE_SECRET")
 GEMINI_KEY      = os.getenv("GEMINI_KEY")
+DISCOGS_TOKEN   = os.getenv("DISCOGS_TOKEN")  # Aggiungi questa variabile su Railway
 
 class RegisterData(BaseModel):
     email: str
     password: str
     nome: str
 
-class LoginData(BaseModel):
+class LoginData(BaseModel): 
     email: str
     password: str
 
@@ -44,6 +45,106 @@ def supa_headers(token: str = None, use_secret: bool = False):
     h = {"apikey": key, "Content-Type": "application/json"}
     h["Authorization"] = f"Bearer {token}" if token else f"Bearer {key}"
     return h
+
+async def cerca_su_discogs(gemini_data: dict) -> dict:
+    """Cerca su Discogs usando i dati di Gemini e arricchisce i campi."""
+    if not DISCOGS_TOKEN:
+        print("DISCOGS: token non configurato")
+        return gemini_data
+
+    headers = {
+        "Authorization": f"Discogs token={DISCOGS_TOKEN}",
+        "User-Agent": "VinylHunter/1.0"
+    }
+
+    # Costruisci query di ricerca con i dati disponibili
+    query_parts = []
+    if gemini_data.get("catno"):
+        query_parts.append(gemini_data["catno"])
+    if gemini_data.get("artista"):
+        query_parts.append(gemini_data["artista"])
+    if gemini_data.get("titolo"):
+        query_parts.append(gemini_data["titolo"])
+    if gemini_data.get("etichetta"):
+        query_parts.append(gemini_data["etichetta"])
+
+    if not query_parts:
+        print("DISCOGS: nessun dato da cercare")
+        return gemini_data
+
+    query = " ".join(query_parts)
+    print(f"DISCOGS QUERY: {query}")
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # Prima cerca per catno se disponibile
+            params = {"q": query, "type": "release", "per_page": 3}
+            if gemini_data.get("catno"):
+                params["catno"] = gemini_data["catno"]
+
+            r = await client.get(
+                "https://api.discogs.com/database/search",
+                headers=headers,
+                params=params
+            )
+            print(f"DISCOGS STATUS: {r.status_code}")
+
+            if r.status_code != 200:
+                print(f"DISCOGS ERROR: {r.text[:200]}")
+                return gemini_data
+
+            results = r.json().get("results", [])
+            print(f"DISCOGS RESULTS: {len(results)} trovati")
+
+            if not results:
+                return gemini_data
+
+            # Prendi il primo risultato
+            match = results[0]
+            print(f"DISCOGS MATCH: {match.get('title')} - {match.get('year')}")
+
+            # Estrai artista e titolo dal campo title (formato: "Artista - Titolo")
+            title_full = match.get("title", "")
+            artista = gemini_data.get("artista", "")
+            titolo = gemini_data.get("titolo", "")
+            if " - " in title_full:
+                parts = title_full.split(" - ", 1)
+                artista = parts[0].strip()
+                titolo = parts[1].strip()
+
+            # Stile/genere
+            styles = match.get("style", []) or match.get("genre", [])
+            stile = ", ".join(styles[:2]) if styles else gemini_data.get("stile", "")
+
+            # Formato
+            formats = match.get("format", [])
+            formato = formats[0] if formats else gemini_data.get("formato", "")
+
+            # Etichetta
+            labels = match.get("label", [])
+            etichetta = labels[0] if labels else gemini_data.get("etichetta", "")
+
+            # Anno
+            anno = str(match.get("year", "")) or gemini_data.get("anno", "")
+
+            # Catno
+            catno = match.get("catno", "") or gemini_data.get("catno", "")
+
+            result = {
+                "artista": artista or gemini_data.get("artista", ""),
+                "titolo": titolo or gemini_data.get("titolo", ""),
+                "formato": formato or gemini_data.get("formato", ""),
+                "stile": stile or gemini_data.get("stile", ""),
+                "anno": anno or gemini_data.get("anno", ""),
+                "etichetta": etichetta or gemini_data.get("etichetta", ""),
+                "catno": catno or gemini_data.get("catno", ""),
+            }
+            print(f"DISCOGS ENRICHED: {result}")
+            return result
+
+    except Exception as e:
+        print(f"DISCOGS EXCEPTION: {e}")
+        return gemini_data
 
 @app.post("/api/register")
 async def register(data: RegisterData):
@@ -76,48 +177,12 @@ async def login(data: LoginData):
         "nome": res["user"].get("user_metadata", {}).get("nome", data.email)
     }
 
-def parse_ocr_text(text: str) -> dict:
-    """Parse raw OCR text into vinyl fields using heuristics."""
-    lines = [l.strip() for l in text.split('\n') if l.strip()]
-    result = {"artista": "", "titolo": "", "formato": "", "stile": "", "anno": "", "etichetta": "", "catno": ""}
-    
-    import re
-    # Find year
-    for line in lines:
-        year = re.search(r'\b(19[5-9]\d|20[0-2]\d)\b', line)
-        if year:
-            result["anno"] = year.group()
-            break
-    
-    # Find catalog number (common patterns)
-    for line in lines:
-        catno = re.search(r'\b([A-Z]{1,5}[-\s]?\d{3,7}[A-Z]?)\b', line)
-        if catno:
-            result["catno"] = catno.group()
-            break
-    
-    # Find format
-    for line in lines:
-        if re.search(r'\b(LP|EP|7"|12"|45|33|RPM|STEREO|MONO)\b', line, re.IGNORECASE):
-            result["formato"] = re.search(r'\b(LP|EP|7"|12"|45|33|RPM)\b', line, re.IGNORECASE).group() if re.search(r'\b(LP|EP|7"|12"|45|33|RPM)\b', line, re.IGNORECASE) else ""
-            break
-    
-    # First meaningful lines likely artist/title
-    meaningful = [l for l in lines if len(l) > 2 and not l.isdigit()]
-    if meaningful:
-        result["artista"] = meaningful[0]
-    if len(meaningful) > 1:
-        result["titolo"] = meaningful[1]
-    if len(meaningful) > 2:
-        result["etichetta"] = meaningful[2]
-    
-    return result
-
 @app.post("/api/scan")
 async def scan_label(file: UploadFile = File(...)):
     content = await file.read()
-    
-    # Try Gemini first if key available
+    gemini_data = {"artista": "", "titolo": "", "formato": "", "stile": "", "anno": "", "etichetta": "", "catno": ""}
+
+    # Gemini OCR
     if GEMINI_KEY:
         try:
             b64 = base64.b64encode(content).decode()
@@ -131,43 +196,22 @@ Se un campo non è visibile lascialo stringa vuota."""
             async with httpx.AsyncClient(timeout=30) as client:
                 r = await client.post(gemini_url, json=payload)
             print(f"GEMINI STATUS: {r.status_code}")
-            print(f"GEMINI RESPONSE: {r.text[:500]}")
             if r.status_code == 200:
-                resp_json = r.json()
-                print(f"GEMINI FULL: {str(resp_json)[:800]}")
-                text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+                text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
                 print(f"GEMINI TEXT: {text[:500]}")
                 text = text.strip().replace("```json", "").replace("```", "").strip()
                 try:
-                    return json.loads(text)
+                    gemini_data = json.loads(text)
                 except Exception as pe:
                     print(f"JSON PARSE ERROR: {pe}")
-                    return {"artista": "", "titolo": "", "formato": "", "stile": "", "anno": "", "etichetta": "", "catno": ""}
+            else:
+                print(f"GEMINI ERROR: {r.text[:300]}")
         except Exception as e:
-            print(f"GEMINI ERROR: {e}")
-    
-    # Fallback: Tesseract OCR
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-            tmp.write(content)
-            tmp_path = tmp.name
-        
-        result = subprocess.run(
-            ["tesseract", tmp_path, "stdout", "-l", "ita+eng", "--psm", "3"],
-            capture_output=True, text=True, timeout=30
-        )
-        os.unlink(tmp_path)
-        
-        if result.returncode == 0 and result.stdout.strip():
-            print(f"TESSERACT OUTPUT: {result.stdout[:300]}")
-            return parse_ocr_text(result.stdout)
-        else:
-            print(f"TESSERACT ERROR: {result.stderr}")
-    except Exception as e:
-        print(f"TESSERACT EXCEPTION: {e}")
-    
-    # Last resort: return empty fields
-    return {"artista": "", "titolo": "", "formato": "", "stile": "", "anno": "", "etichetta": "", "catno": ""}
+            print(f"GEMINI EXCEPTION: {e}")
+
+    # Arricchisci con Discogs
+    result = await cerca_su_discogs(gemini_data)
+    return result
 
 @app.post("/api/vinile")
 async def add_vinyl(v: VinylData):
