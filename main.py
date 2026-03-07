@@ -133,9 +133,16 @@ Se un campo non è visibile lascialo stringa vuota."""
             print(f"GEMINI STATUS: {r.status_code}")
             print(f"GEMINI RESPONSE: {r.text[:500]}")
             if r.status_code == 200:
-                text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                resp_json = r.json()
+                print(f"GEMINI FULL: {str(resp_json)[:800]}")
+                text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+                print(f"GEMINI TEXT: {text[:500]}")
                 text = text.strip().replace("```json", "").replace("```", "").strip()
-                return json.loads(text)
+                try:
+                    return json.loads(text)
+                except Exception as pe:
+                    print(f"JSON PARSE ERROR: {pe}")
+                    return {"artista": "", "titolo": "", "formato": "", "stile": "", "anno": "", "etichetta": "", "catno": ""}
         except Exception as e:
             print(f"GEMINI ERROR: {e}")
     
