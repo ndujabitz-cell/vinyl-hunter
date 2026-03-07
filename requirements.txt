@@ -4,3 +4,5 @@ openpyxl
 python-multipart
 httpx
 jinja2
+pytesseract
+Pillow
