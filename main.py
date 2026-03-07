@@ -122,7 +122,7 @@ async def scan_label(file: UploadFile = File(...)):
         try:
             b64 = base64.b64encode(content).decode()
             mime = file.content_type or "image/jpeg"
-            gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
+            gemini_url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_KEY}"
             prompt = """Analizza questa immagine di un'etichetta o copertina di disco vinile.
 Estrai le informazioni e rispondi SOLO con JSON valido senza markdown:
 {"artista":"","titolo":"","formato":"","stile":"","anno":"","etichetta":"","catno":""}
@@ -179,8 +179,9 @@ async def add_vinyl(v: VinylData):
                   "formato": v.formato, "stile": v.stile, "anno": v.anno,
                   "etichetta": v.etichetta, "catno": v.catno}
         )
+    print(f"SAVE STATUS: {r.status_code} RESPONSE: {r.text[:200]}")
     if r.status_code not in (200, 201):
-        raise HTTPException(400, "Errore salvataggio")
+        raise HTTPException(400, f"Errore salvataggio: {r.status_code} - {r.text[:100]}")
     return {"status": "ok"}
 
 @app.get("/api/vinili/{user_id}")
