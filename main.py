@@ -288,7 +288,18 @@ async def delete_vinyl(vinyl_id: int, token: str):
         raise HTTPException(400, "Errore eliminazione")
     return {"status": "deleted"}
 
-@app.post("/api/import_excel")
+@app.delete("/api/catalogo/{user_id}")
+async def delete_catalog(user_id: str, token: str):
+    async with httpx.AsyncClient() as client:
+        r = await client.delete(
+            f"{SUPABASE_URL}/rest/v1/vinili?user_id=eq.{user_id}",
+            headers=supa_headers(token)
+        )
+    if r.status_code not in (200, 204):
+        raise HTTPException(400, "Errore eliminazione catalogo")
+    return {"status": "deleted"}
+
+
 async def import_excel(user_id: str, token: str, file: UploadFile = File(...)):
     content = await file.read()
     wb = load_workbook(io.BytesIO(content))
