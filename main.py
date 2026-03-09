@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from typing import Optional
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
+from collections import Counter
 
 app = FastAPI()
 
@@ -18,14 +19,19 @@ SUPABASE_URL    = os.getenv("SUPABASE_URL")
 SUPABASE_ANON   = os.getenv("SUPABASE_ANON")
 SUPABASE_SECRET = os.getenv("SUPABASE_SECRET")
 GEMINI_KEY      = os.getenv("GEMINI_KEY")
-DISCOGS_TOKEN   = os.getenv("DISCOGS_TOKEN")  # Aggiungi questa variabile su Railway
+DISCOGS_TOKEN   = os.getenv("DISCOGS_TOKEN")
+
+DISCOGS_HEADERS = lambda: {
+    "Authorization": f"Discogs token={DISCOGS_TOKEN}",
+    "User-Agent": "VinylHunter/1.0"
+}
 
 class RegisterData(BaseModel):
     email: str
     password: str
     nome: str
 
-class LoginData(BaseModel): 
+class LoginData(BaseModel):
     email: str
     password: str
 
@@ -38,7 +44,9 @@ class VinylData(BaseModel):
     stile: Optional[str] = ""
     anno: Optional[str] = ""
     etichetta: Optional[str] = ""
-    catno: Optional[str] = ""
+    stampa: Optional[str] = ""
+    stampa_costosa: Optional[str] = ""
+    prezzo_max: Optional[str] = ""
 
 def supa_headers(token: str = None, use_secret: bool = False):
     key = SUPABASE_SECRET if use_secret else SUPABASE_ANON
@@ -46,21 +54,57 @@ def supa_headers(token: str = None, use_secret: bool = False):
     h["Authorization"] = f"Bearer {token}" if token else f"Bearer {key}"
     return h
 
+async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
+    """Cerca tutte le stampe di un master e trova quella col prezzo medio più alto."""
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.get(
+                f"https://api.discogs.com/masters/{master_id}/versions",
+                headers=DISCOGS_HEADERS(),
+                params={"per_page": 50}
+            )
+            if r.status_code != 200:
+                return "", ""
+            
+            versions = r.json().get("versions", [])
+            best_price = 0
+            best_catno = ""
+            
+            for v in versions:
+                release_id = v.get("id")
+                catno = v.get("catno", "")
+                if not release_id:
+                    continue
+                # Prendi statistiche marketplace
+                stats_r = await client.get(
+                    f"https://api.discogs.com/marketplace/stats/{release_id}",
+                    headers=DISCOGS_HEADERS()
+                )
+                if stats_r.status_code == 200:
+                    stats = stats_r.json()
+                    avg = stats.get("lowest_price", {})
+                    if isinstance(avg, dict):
+                        price = avg.get("value", 0) or 0
+                    else:
+                        price = avg or 0
+                    if price > best_price:
+                        best_price = price
+                        best_catno = catno
+            
+            if best_price > 0:
+                return best_catno, f"€{best_price:.2f}"
+            return "", ""
+    except Exception as e:
+        print(f"DISCOGS PRICE ERROR: {e}")
+        return "", ""
+
 async def cerca_su_discogs(gemini_data: dict) -> dict:
-    """Cerca su Discogs usando i dati di Gemini e arricchisce i campi."""
     if not DISCOGS_TOKEN:
-        print("DISCOGS: token non configurato")
         return gemini_data
 
-    headers = {
-        "Authorization": f"Discogs token={DISCOGS_TOKEN}",
-        "User-Agent": "VinylHunter/1.0"
-    }
-
-    # Costruisci query di ricerca con i dati disponibili
     query_parts = []
-    if gemini_data.get("catno"):
-        query_parts.append(gemini_data["catno"])
+    if gemini_data.get("stampa") or gemini_data.get("catno"):
+        query_parts.append(gemini_data.get("stampa") or gemini_data.get("catno", ""))
     if gemini_data.get("artista"):
         query_parts.append(gemini_data["artista"])
     if gemini_data.get("titolo"):
@@ -69,7 +113,6 @@ async def cerca_su_discogs(gemini_data: dict) -> dict:
         query_parts.append(gemini_data["etichetta"])
 
     if not query_parts:
-        print("DISCOGS: nessun dato da cercare")
         return gemini_data
 
     query = " ".join(query_parts)
@@ -77,33 +120,26 @@ async def cerca_su_discogs(gemini_data: dict) -> dict:
 
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            # Prima cerca per catno se disponibile
             params = {"q": query, "type": "release", "per_page": 3}
-            if gemini_data.get("catno"):
-                params["catno"] = gemini_data["catno"]
+            catno = gemini_data.get("stampa") or gemini_data.get("catno", "")
+            if catno:
+                params["catno"] = catno
 
             r = await client.get(
                 "https://api.discogs.com/database/search",
-                headers=headers,
+                headers=DISCOGS_HEADERS(),
                 params=params
             )
-            print(f"DISCOGS STATUS: {r.status_code}")
-
             if r.status_code != 200:
-                print(f"DISCOGS ERROR: {r.text[:200]}")
                 return gemini_data
 
             results = r.json().get("results", [])
-            print(f"DISCOGS RESULTS: {len(results)} trovati")
-
             if not results:
                 return gemini_data
 
-            # Prendi il primo risultato
             match = results[0]
-            print(f"DISCOGS MATCH: {match.get('title')} - {match.get('year')}")
+            print(f"DISCOGS MATCH: {match.get('title')} {match.get('year')}")
 
-            # Estrai artista e titolo dal campo title (formato: "Artista - Titolo")
             title_full = match.get("title", "")
             artista = gemini_data.get("artista", "")
             titolo = gemini_data.get("titolo", "")
@@ -112,23 +148,24 @@ async def cerca_su_discogs(gemini_data: dict) -> dict:
                 artista = parts[0].strip()
                 titolo = parts[1].strip()
 
-            # Stile/genere
             styles = match.get("style", []) or match.get("genre", [])
             stile = ", ".join(styles[:2]) if styles else gemini_data.get("stile", "")
 
-            # Formato
             formats = match.get("format", [])
             formato = formats[0] if formats else gemini_data.get("formato", "")
 
-            # Etichetta
             labels = match.get("label", [])
             etichetta = labels[0] if labels else gemini_data.get("etichetta", "")
 
-            # Anno
             anno = str(match.get("year", "")) or gemini_data.get("anno", "")
+            stampa = match.get("catno", "") or gemini_data.get("stampa", "") or gemini_data.get("catno", "")
 
-            # Catno
-            catno = match.get("catno", "") or gemini_data.get("catno", "")
+            # Cerca prezzo max se abbiamo master_id
+            stampa_costosa = ""
+            prezzo_max = ""
+            master_id = match.get("master_id")
+            if master_id:
+                stampa_costosa, prezzo_max = await cerca_prezzo_max_discogs(master_id)
 
             result = {
                 "artista": artista or gemini_data.get("artista", ""),
@@ -137,7 +174,9 @@ async def cerca_su_discogs(gemini_data: dict) -> dict:
                 "stile": stile or gemini_data.get("stile", ""),
                 "anno": anno or gemini_data.get("anno", ""),
                 "etichetta": etichetta or gemini_data.get("etichetta", ""),
-                "catno": catno or gemini_data.get("catno", ""),
+                "stampa": stampa,
+                "stampa_costosa": stampa_costosa,
+                "prezzo_max": prezzo_max,
             }
             print(f"DISCOGS ENRICHED: {result}")
             return result
@@ -155,7 +194,6 @@ async def register(data: RegisterData):
             json={"email": data.email, "password": data.password, "data": {"nome": data.nome}}
         )
     res = r.json()
-    print(f"REGISTER STATUS: {r.status_code} RESPONSE: {res}")
     if r.status_code not in (200, 201) or "error" in res:
         raise HTTPException(400, res.get("msg") or res.get("error_description") or res.get("message") or str(res))
     return {"status": "ok", "message": "Registrazione completata"}
@@ -180,9 +218,8 @@ async def login(data: LoginData):
 @app.post("/api/scan")
 async def scan_label(file: UploadFile = File(...)):
     content = await file.read()
-    gemini_data = {"artista": "", "titolo": "", "formato": "", "stile": "", "anno": "", "etichetta": "", "catno": ""}
+    gemini_data = {"artista": "", "titolo": "", "formato": "", "stile": "", "anno": "", "etichetta": "", "stampa": "", "stampa_costosa": "", "prezzo_max": ""}
 
-    # Gemini OCR
     if GEMINI_KEY:
         try:
             b64 = base64.b64encode(content).decode()
@@ -190,7 +227,8 @@ async def scan_label(file: UploadFile = File(...)):
             gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_KEY}"
             prompt = """Analizza questa immagine di un'etichetta o copertina di disco vinile.
 Estrai le informazioni e rispondi SOLO con JSON valido senza markdown:
-{"artista":"","titolo":"","formato":"","stile":"","anno":"","etichetta":"","catno":""}
+{"artista":"","titolo":"","formato":"","stile":"","anno":"","etichetta":"","stampa":""}
+Il campo "stampa" è il numero di catalogo (cat. no.) del disco.
 Se un campo non è visibile lascialo stringa vuota."""
             payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime, "data": b64}}]}]}
             async with httpx.AsyncClient(timeout=30) as client:
@@ -201,7 +239,7 @@ Se un campo non è visibile lascialo stringa vuota."""
                 print(f"GEMINI TEXT: {text[:500]}")
                 text = text.strip().replace("```json", "").replace("```", "").strip()
                 try:
-                    gemini_data = json.loads(text)
+                    gemini_data.update(json.loads(text))
                 except Exception as pe:
                     print(f"JSON PARSE ERROR: {pe}")
             else:
@@ -209,7 +247,6 @@ Se un campo non è visibile lascialo stringa vuota."""
         except Exception as e:
             print(f"GEMINI EXCEPTION: {e}")
 
-    # Arricchisci con Discogs
     result = await cerca_su_discogs(gemini_data)
     return result
 
@@ -221,7 +258,8 @@ async def add_vinyl(v: VinylData):
             headers=supa_headers(v.access_token),
             json={"user_id": v.user_id, "artista": v.artista, "titolo": v.titolo,
                   "formato": v.formato, "stile": v.stile, "anno": v.anno,
-                  "etichetta": v.etichetta, "catno": v.catno}
+                  "etichetta": v.etichetta, "stampa": v.stampa,
+                  "stampa_costosa": v.stampa_costosa, "prezzo_max": v.prezzo_max}
         )
     print(f"SAVE STATUS: {r.status_code} RESPONSE: {r.text[:200]}")
     if r.status_code not in (200, 201):
@@ -256,17 +294,28 @@ async def import_excel(user_id: str, token: str, file: UploadFile = File(...)):
     wb = load_workbook(io.BytesIO(content))
     ws = wb.active
     imported = 0
+    TOTALI = {'7"', '10"', '12"', '4"', 'lp', '2xlp', '2x lp', 'ep', 'single', 'riepilogo formati', 'totale vinili'}
+
     async with httpx.AsyncClient() as client:
         for row in ws.iter_rows(min_row=2, values_only=True):
             if not row or not row[0]:
                 continue
+            artista = str(row[0] or "").strip()
+            if artista.lower() in TOTALI or (len(artista) <= 5 and str(row[1] or "").isdigit()):
+                continue
             await client.post(
                 f"{SUPABASE_URL}/rest/v1/vinili",
                 headers=supa_headers(token),
-                json={"user_id": user_id, "artista": str(row[0] or ""),
-                      "titolo": str(row[1] or ""), "formato": str(row[2] or ""),
-                      "stile": str(row[3] or ""), "anno": str(row[4] or ""),
-                      "etichetta": str(row[5] or ""), "catno": str(row[6] or "")}
+                json={"user_id": user_id,
+                      "artista": artista,
+                      "titolo": str(row[1] or ""),
+                      "formato": str(row[2] or ""),
+                      "stile": str(row[3] or ""),
+                      "anno": str(row[4] or ""),
+                      "etichetta": str(row[5] or ""),
+                      "stampa": str(row[6] or ""),
+                      "stampa_costosa": str(row[7] or "") if len(row) > 7 else "",
+                      "prezzo_max": str(row[8] or "") if len(row) > 8 else ""}
             )
             imported += 1
     return {"status": "ok", "imported": imported}
@@ -281,22 +330,73 @@ async def export_excel(user_id: str, token: str):
     if r.status_code != 200:
         raise HTTPException(400, "Errore recupero dati")
     vinili = r.json()
+
     wb = Workbook()
     ws = wb.active
     ws.title = "Catalogo Vinili"
+
     header_fill = PatternFill(start_color="1a1a2e", end_color="1a1a2e", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True, size=11)
-    headers = ["Artista", "Titolo", "Formato", "Stile", "Anno", "Etichetta", "Cat. No."]
+    headers = ["Artista", "Titolo", "Formato", "Stile", "Anno", "Etichetta", "Stampa", "Stampa più Costosa", "Prezzo medio più alto"]
+    col_widths = [25, 30, 12, 20, 8, 20, 15, 18, 20]
+
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center")
+
     for row_idx, v in enumerate(vinili, 2):
-        for col, field in enumerate(["artista","titolo","formato","stile","anno","etichetta","catno"], 1):
-            ws.cell(row=row_idx, column=col, value=v.get(field, ""))
-    for col, width in zip(range(1, 8), [25, 30, 10, 20, 8, 20, 15]):
+        ws.cell(row=row_idx, column=1, value=v.get("artista", ""))
+        ws.cell(row=row_idx, column=2, value=v.get("titolo", ""))
+        ws.cell(row=row_idx, column=3, value=v.get("formato", ""))
+        ws.cell(row=row_idx, column=4, value=v.get("stile", ""))
+        ws.cell(row=row_idx, column=5, value=v.get("anno", ""))
+        ws.cell(row=row_idx, column=6, value=v.get("etichetta", ""))
+        ws.cell(row=row_idx, column=7, value=v.get("stampa", ""))
+        ws.cell(row=row_idx, column=8, value=v.get("stampa_costosa", ""))
+        ws.cell(row=row_idx, column=9, value=v.get("prezzo_max", ""))
+
+    for col, width in enumerate(col_widths, 1):
         ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = width
+
+    # Riepilogo formati in fondo
+    formati_count = Counter()
+    for v in vinili:
+        fmt = str(v.get("formato", "") or "").strip().lower()
+        if fmt:
+            if '7' in fmt: formati_count['7"'] += 1
+            elif '10' in fmt: formati_count['10"'] += 1
+            elif '12' in fmt: formati_count['12"'] += 1
+            elif '2xlp' in fmt or '2x lp' in fmt or 'double' in fmt: formati_count['2xLP'] += 1
+            elif 'lp' in fmt: formati_count['LP'] += 1
+            else: formati_count[fmt[:10]] += 1
+
+    last_row = ws.max_row + 2
+    total_fill = PatternFill(start_color="2d2d4e", end_color="2d2d4e", fill_type="solid")
+    total_font = Font(bold=True, color="FFFFFF")
+
+    title_cell = ws.cell(row=last_row, column=1, value="RIEPILOGO FORMATI")
+    title_cell.font = total_font
+    title_cell.fill = total_fill
+    last_row += 1
+
+    totale = 0
+    for fmt in ['4"', '7"', '10"', '12"', 'LP', '2xLP']:
+        count = formati_count.get(fmt, 0)
+        c1 = ws.cell(row=last_row, column=1, value=fmt)
+        c2 = ws.cell(row=last_row, column=2, value=count)
+        c1.font = total_font; c1.fill = total_fill
+        c2.font = total_font; c2.fill = total_fill
+        totale += count
+        last_row += 1
+
+    c1 = ws.cell(row=last_row, column=1, value="TOTALE VINILI")
+    c2 = ws.cell(row=last_row, column=2, value=totale)
+    c1.font = Font(bold=True, color="FFFFFF", size=12)
+    c1.fill = PatternFill(start_color="4a0080", end_color="4a0080", fill_type="solid")
+    c2.font = c1.font; c2.fill = c1.fill
+
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
     wb.save(tmp.name)
     return FileResponse(tmp.name, filename="Catalogo_Vinili.xlsx",
