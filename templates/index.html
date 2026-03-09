@@ -23,7 +23,7 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
 
 /* ── AUTH ── */
 .auth-wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 30px 24px; }
-.auth-logo { font-size: 64px; margin-bottom: 12px; animation: spin 8s linear infinite; }
+.auth-logo { width: 100px; height: 100px; margin-bottom: 12px; animation: spin 4s linear infinite; }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 .auth-title { font-size: 26px; font-weight: 800; margin-bottom: 4px; }
 .auth-sub { color: #aaa; font-size: 14px; margin-bottom: 32px; }
@@ -105,7 +105,15 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
 .nav-btn.active { color: #e94560; }
 .nav-btn span { font-size: 22px; }
 
-/* ── TOAST ── */
+/* ── MODAL ── */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 24px; }
+.modal-box { background: #0f3460; border-radius: 20px; padding: 28px 24px; width: 100%; max-width: 360px; text-align: center; border: 1px solid #e94560; }
+.modal-box h3 { font-size: 18px; font-weight: 700; margin-bottom: 10px; color: #e94560; }
+.modal-box p { font-size: 14px; color: #ccc; margin-bottom: 24px; }
+.modal-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.btn-danger { background: #e94560; color: white; border: none; border-radius: 10px; padding: 13px; font-size: 14px; font-weight: 700; cursor: pointer; }
+.btn-cancel { background: #2a2a3e; color: #aaa; border: none; border-radius: 10px; padding: 13px; font-size: 14px; cursor: pointer; }
+
 .toast { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%); background: #0f9b58; color: white; padding: 10px 22px; border-radius: 20px; font-size: 13px; font-weight: 600; z-index: 999; opacity: 0; transition: opacity 0.3s; white-space: nowrap; pointer-events: none; }
 .toast.show { opacity: 1; }
 .toast.error { background: #e94560; }
@@ -125,7 +133,16 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
 <!-- AUTH SCREEN -->
 <div class="screen active" id="screen-auth">
   <div class="auth-wrap">
-    <div class="auth-logo">🎵</div>
+    <svg class="auth-logo" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+      <circle cx="50" cy="50" r="48" fill="#111"/>
+      <circle cx="50" cy="50" r="38" fill="#1a1a1a"/>
+      <circle cx="50" cy="50" r="28" fill="#222"/>
+      <circle cx="50" cy="50" r="18" fill="#1a1a1a"/>
+      <circle cx="50" cy="50" r="8" fill="#333"/>
+      <circle cx="50" cy="50" r="3" fill="#e94560"/>
+      <path d="M50 2 A48 48 0 0 1 98 50" stroke="#533483" stroke-width="2" fill="none" opacity="0.6"/>
+      <path d="M50 98 A48 48 0 0 1 2 50" stroke="#533483" stroke-width="2" fill="none" opacity="0.6"/>
+    </svg>
     <div class="auth-title">Vinyl Hunter</div>
     <div class="auth-sub">Cataloga la tua collezione di vinili</div>
     <div class="auth-card">
@@ -180,6 +197,22 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
       <span class="icon">⬇️</span>
       <span class="txt">Scarica catalogo<small>Salva il file .xlsx sul telefono</small></span>
     </button>
+    <button class="btn-action" style="background:linear-gradient(135deg,#7b0000,#e94560)" onclick="showDeleteCatalogModal()">
+      <span class="icon">🗑️</span>
+      <span class="txt">Elimina catalogo<small>Cancella tutti i tuoi dischi</small></span>
+    </button>
+  </div>
+</div>
+
+<!-- MODAL ELIMINA CATALOGO -->
+<div class="modal-overlay" id="modal-delete-catalog" style="display:none">
+  <div class="modal-box">
+    <h3>⚠️ Attenzione!</h3>
+    <p>Davvero vuoi eliminare l'intero catalogo?<br>Questa operazione non può essere annullata.</p>
+    <div class="modal-btns">
+      <button class="btn-cancel" onclick="hideDeleteCatalogModal()">No, annulla</button>
+      <button class="btn-danger" onclick="deleteCatalog()">Sì, elimina tutto</button>
+    </div>
   </div>
 </div>
 
@@ -378,8 +411,10 @@ async function confirmVinyl() {
     formato: document.getElementById('f-formato').value,
     anno: document.getElementById('f-anno').value,
     etichetta: document.getElementById('f-etichetta').value,
-    catno: document.getElementById('f-catno').value,
+    stampa: document.getElementById('f-catno').value,
     stile: document.getElementById('f-stile').value,
+    stampa_costosa: '',
+    prezzo_max: '',
   };
   if (!vinyl.artista) return showToast('Inserisci almeno l\'artista', true);
   try {
@@ -482,7 +517,28 @@ async function exportExcel() {
   } catch(e) { showToast(e.message, true); }
 }
 
-// ── Toast ────────────────────────────────────────────────
+function showDeleteCatalogModal() {
+  document.getElementById('modal-delete-catalog').style.display = 'flex';
+}
+
+function hideDeleteCatalogModal() {
+  document.getElementById('modal-delete-catalog').style.display = 'none';
+}
+
+async function deleteCatalog() {
+  hideDeleteCatalogModal();
+  showToast('⏳ Eliminazione in corso…');
+  try {
+    const r = await fetch(`/api/catalogo/${STATE.userId}?token=${STATE.token}`, { method: 'DELETE' });
+    if (!r.ok) throw new Error('Errore eliminazione');
+    showToast('🗑 Catalogo eliminato');
+    STATE.vinyls = [];
+    renderList([]);
+    updateStats();
+  } catch(e) { showToast(e.message, true); }
+}
+
+
 function showToast(msg, isError = false) {
   const t = document.getElementById('toast');
   t.textContent = msg;
