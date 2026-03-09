@@ -364,7 +364,7 @@ async def export_excel(user_id: str, token: str):
         ws.cell(row=row_idx, column=4, value=v.get("stile", ""))
         ws.cell(row=row_idx, column=5, value=v.get("anno", ""))
         ws.cell(row=row_idx, column=6, value=v.get("etichetta", ""))
-        ws.cell(row=row_idx, column=7, value=v.get("stampa", ""))
+        ws.cell(row=row_idx, column=7, value=v.get("stampa", "") or v.get("catno", ""))
         ws.cell(row=row_idx, column=8, value=v.get("stampa_costosa", ""))
         ws.cell(row=row_idx, column=9, value=v.get("prezzo_max", ""))
 
@@ -408,10 +408,15 @@ async def export_excel(user_id: str, token: str):
     c1.fill = PatternFill(start_color="4a0080", end_color="4a0080", fill_type="solid")
     c2.font = c1.font; c2.fill = c1.fill
 
-    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx")
-    wb.save(tmp.name)
-    return FileResponse(tmp.name, filename="Catalogo_Vinili.xlsx",
-                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    from fastapi.responses import StreamingResponse
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=Catalogo_Vinili.xlsx"}
+    )
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
