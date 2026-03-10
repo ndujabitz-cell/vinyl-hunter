@@ -226,10 +226,16 @@ async def scan_label(file: UploadFile = File(...)):
             mime = file.content_type or "image/jpeg"
             gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_KEY}"
             prompt = """Analizza questa immagine di un'etichetta o copertina di disco vinile.
-Estrai le informazioni e rispondi SOLO con JSON valido senza markdown:
+Estrai TUTTE le informazioni visibili e rispondi SOLO con JSON valido senza markdown:
 {"artista":"","titolo":"","formato":"","stile":"","anno":"","etichetta":"","stampa":""}
-Il campo "stampa" è il numero di catalogo (cat. no.) del disco.
-Se un campo non è visibile lascialo stringa vuota."""
+
+Istruzioni importanti:
+- "stampa" = numero di catalogo (cat no, catalog number, es: CBS 1234, CLMN-126, HS032, nr 015/B)
+- "anno" = anno di pubblicazione (cerca numeri a 4 cifre tipo 1975, 2009 ecc)
+- "formato" = 7", 10", 12", LP, EP, 45rpm ecc
+- "etichetta" = nome dell'etichetta discografica (es: Atlantic, Fania, Columbia)
+- Se un campo non è visibile lascialo stringa vuota
+- Cerca bene il numero di catalogo, spesso è stampato in piccolo sul bordo o in basso"""
             payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime, "data": b64}}]}]}
             async with httpx.AsyncClient(timeout=30) as client:
                 r = await client.post(gemini_url, json=payload)
@@ -409,14 +415,14 @@ async def export_excel(user_id: str, token: str):
     c1.fill = PatternFill(start_color="4a0080", end_color="4a0080", fill_type="solid")
     c2.font = c1.font; c2.fill = c1.fill
 
-    from fastapi.responses import StreamingResponse
+    from fastapi.responses import Response
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
-    return StreamingResponse(
-        output,
+    return Response(
+        content=output.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=Catalogo_Vinili.xlsx"}
+        headers={"Content-Disposition": "attachment; filename=\"Catalogo_Vinili.xlsx\""}
     )
 
 @app.get("/", response_class=HTMLResponse)
