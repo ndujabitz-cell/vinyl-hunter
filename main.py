@@ -5,7 +5,7 @@ import base64
 import httpx
 import subprocess
 import tempfile
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
@@ -300,7 +300,8 @@ async def delete_catalog(user_id: str, token: str):
     return {"status": "deleted"}
 
 
-async def import_excel(user_id: str, token: str, file: UploadFile = File(...)):
+@app.post("/api/import_excel")
+async def import_excel(user_id: str = Form(...), token: str = Form(...), file: UploadFile = File(...)):
     content = await file.read()
     wb = load_workbook(io.BytesIO(content))
     ws = wb.active
