@@ -521,9 +521,11 @@ async function importExcel(event) {
   if (!file) return;
   const form = new FormData();
   form.append('file', file);
+  form.append('user_id', STATE.userId);
+  form.append('token', STATE.token);
   showToast('⏳ Importazione in corso…');
   try {
-    const r = await fetch(`/api/import_excel?user_id=${STATE.userId}&token=${STATE.token}`, { method:'POST', body: form });
+    const r = await fetch(`/api/import_excel`, { method:'POST', body: form });
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || 'Errore importazione');
     showToast(`✅ Importati ${data.imported} dischi!`);
