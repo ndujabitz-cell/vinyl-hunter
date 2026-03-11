@@ -514,46 +514,51 @@ async function importExcel(event) {
 }
 
 async function exportExcel() {
-  showToast('⏳ Preparazione file…');
+  if (!STATE.userId || !STATE.token) return showToast('Devi essere loggato', true);
+  showToast('\u23f3 Preparazione file\u2026');
   try {
     const url = `/api/export_excel/${STATE.userId}?token=${encodeURIComponent(STATE.token)}`;
-    const r = await fetch(url);
-    if (!r.ok) throw new Error('Errore export: ' + r.status);
+    const r = await fetch(url, { method: 'GET', cache: 'no-store' });
+    if (!r.ok) {
+      const errText = await r.text().catch(() => r.status);
+      throw new Error('Errore server: ' + errText);
+    }
 
-    // Forza il tipo MIME corretto ignorando quello dichiarato dal server
+    // Leggi come ArrayBuffer e forza il MIME xlsx
     const arrayBuffer = await r.arrayBuffer();
+    if (!arrayBuffer || arrayBuffer.byteLength < 100) {
+      throw new Error('File ricevuto vuoto o corrotto');
+    }
+
     const blob = new Blob([arrayBuffer], {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     });
     const blobUrl = URL.createObjectURL(blob);
+    const filename = 'Catalogo_Vinili.xlsx';
 
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-    const isAndroid = /Android/.test(navigator.userAgent);
 
     if (isIOS) {
-      // iOS Safari: window.open è l'unico modo affidabile
       window.open(blobUrl, '_blank');
-    } else if (isAndroid) {
-      // Android: usa <a> con download e click sintetico via dispatchEvent
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = 'Catalogo_Vinili.xlsx';
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(blobUrl); }, 5000);
     } else {
-      // PC (Chrome, Firefox, Edge)
+      // Funziona su Android Chrome, PC Chrome, Firefox, Edge
       const a = document.createElement('a');
       a.href = blobUrl;
-      a.download = 'Catalogo_Vinili.xlsx';
+      a.download = filename;
+      a.style.position = 'fixed';
+      a.style.top = '-100px';
       document.body.appendChild(a);
       a.click();
-      document.body.removeChild(a);
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(blobUrl);
+      }, 3000);
     }
-    showToast('📥 Download avviato!');
-  } catch(e) { showToast(e.message, true); }
+    showToast('\ud83d\udce5 Download avviato!');
+  } catch(e) {
+    console.error('Export error:', e);
+    showToast(e.message || 'Errore download', true);
+  }
 }
 
 function showDeleteCatalogModal() {
