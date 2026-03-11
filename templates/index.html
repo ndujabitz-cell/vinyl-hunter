@@ -225,10 +225,6 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
       <span class="icon">⬇️</span>
       <span class="txt">Scarica catalogo<small>Salva il file .xlsx sul telefono</small></span>
     </button>
-    <button class="btn-action" style="background:linear-gradient(135deg,#7b0000,#e94560)" onclick="showDeleteCatalogModal()">
-      <span class="icon">🗑️</span>
-      <span class="txt">Elimina catalogo<small>Cancella tutti i tuoi dischi</small></span>
-    </button>
   </div>
 </div>
 
@@ -300,7 +296,13 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
 <!-- LIST SCREEN -->
 <div class="screen" id="screen-list">
   <div class="list-wrap">
-    <p class="section-label">Il tuo catalogo</p>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+  <p class="section-label" style="margin-bottom:0">Il tuo catalogo</p>
+  <button onclick="showDeleteCatalogModal()" style="background:linear-gradient(135deg,#7b0000,#e94560);border:none;border-radius:10px;color:white;font-size:12px;font-weight:600;padding:8px 14px;cursor:pointer;">
+    🗑️ Elimina tutto
+  </button>
+</div>
+
     <input class="search-bar" placeholder="🔍 Cerca artista, titolo…" type="text" oninput="filterList(this.value)">
     <div id="vinyl-list"></div>
   </div>
@@ -619,6 +621,14 @@ async function exportExcel() {
     setTimeout(()=>document.body.removeChild(a),2000);
   }
   showToast('📥 Download avviato!');
+}
+
+
+function showDeleteCatalogModal() {
+  document.getElementById('modal-delete-catalog').style.display = 'flex';
+}
+function hideDeleteCatalogModal() {
+  document.getElementById('modal-delete-catalog').style.display = 'none';
 }
 
 async function deleteCatalog() {
