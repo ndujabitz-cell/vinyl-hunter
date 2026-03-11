@@ -1,4 +1,4 @@
-mport os
+import os
 import io
 import json
 import base64
@@ -55,7 +55,7 @@ def supa_headers(token: str = None, use_secret: bool = False):
     return h
 
 async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
-    """Cerca tutte le stampe di un master e trova quella col prezzo medio pi alto."""
+    """Cerca tutte le versioni di un master e trova quella con avg_price piu alto."""
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.get(
@@ -65,34 +65,39 @@ async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
             )
             if r.status_code != 200:
                 return "", ""
-            
+
             versions = r.json().get("versions", [])
-            best_price = 0
+            best_price = 0.0
             best_catno = ""
-            
+
             for v in versions:
                 release_id = v.get("id")
                 catno = v.get("catno", "")
                 if not release_id:
                     continue
+
                 stats_r = await client.get(
                     f"https://api.discogs.com/marketplace/stats/{release_id}",
                     headers=DISCOGS_HEADERS()
                 )
                 if stats_r.status_code == 200:
                     stats = stats_r.json()
-                    avg = stats.get("lowest_price", {})
+
+                    # Usa median_price o avg_price (prezzo medio di vendita)
+                    avg = stats.get("median_price") or stats.get("avg_price") or {}
                     if isinstance(avg, dict):
-                        price = avg.get("value", 0) or 0
+                        price = float(avg.get("value", 0) or 0)
                     else:
-                        price = avg or 0
+                        price = float(avg or 0)
+
                     if price > best_price:
                         best_price = price
                         best_catno = catno
-            
+
             if best_price > 0:
-                return best_catno, f"{best_price:.2f}"
+                return best_catno, f"EUR{best_price:.2f}"
             return "", ""
+
     except Exception as e:
         print(f"DISCOGS PRICE ERROR: {e}")
         return "", ""
@@ -229,11 +234,11 @@ Estrai TUTTE le informazioni visibili e rispondi SOLO con JSON valido senza mark
 
 Istruzioni importanti:
 - "stampa" = numero di catalogo (catalog number / cat no / cat. no. / matrix number). Esempi: CBS 1234, CLMN-126, HS032, ATL-50234, 2C 006-93752, nr 015/B. Cercalo sul bordo, in basso, vicino al logo etichetta o inciso nella plastica.
-- "stile" = genere musicale visibile sull'etichetta (es: Soul, Jazz, Rock, Funk, Electronic, Classical). Se non visibile, deducilo dall'etichetta discografica (es: Blue Note  Jazz, Motown  Soul).
+- "stile" = genere musicale visibile sull'etichetta (es: Soul, Jazz, Rock, Funk, Electronic, Classical). Se non visibile, deducilo dall'etichetta discografica (es: Blue Note = Jazz, Motown = Soul).
 - "anno" = anno di pubblicazione (cerca numeri a 4 cifre tipo 1975, 2009 ecc)
 - "formato" = 7", 10", 12", LP, EP, 45rpm, 33rpm ecc
 - "etichetta" = nome dell'etichetta discografica (es: Atlantic, Fania, Columbia, Blue Note)
-- Se un campo non  visibile lascialo stringa vuota
+- Se un campo non e' visibile lascialo stringa vuota
 - NON inventare dati non visibili nell'immagine"""
             payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime, "data": b64}}]}]}
             async with httpx.AsyncClient(timeout=30) as client:
@@ -253,7 +258,6 @@ Istruzioni importanti:
             print(f"GEMINI EXCEPTION: {e}")
 
     result = await cerca_su_discogs(gemini_data)
-    # Assicura che catno sia sempre presente (il frontend legge 'catno')
     result["catno"] = result.get("stampa", "")
     return result
 
@@ -306,7 +310,6 @@ async def delete_catalog(user_id: str, token: str):
         raise HTTPException(400, "Errore eliminazione catalogo")
     return {"status": "deleted"}
 
-
 @app.post("/api/import_excel")
 async def import_excel(user_id: str = Form(...), token: str = Form(...), file: UploadFile = File(...)):
     content = await file.read()
@@ -340,7 +343,6 @@ async def import_excel(user_id: str = Form(...), token: str = Form(...), file: U
     return {"status": "ok", "imported": imported}
 
 
-#  EXPORT EXCEL: GET con token come query param (compatibile mobile/Safari) 
 @app.get("/api/export_excel/{user_id}")
 async def export_excel(user_id: str, token: str = ""):
     async with httpx.AsyncClient() as client:
@@ -358,8 +360,8 @@ async def export_excel(user_id: str, token: str = ""):
 
     header_fill = PatternFill(start_color="1a1a2e", end_color="1a1a2e", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True, size=11)
-    headers = ["Artista", "Titolo", "Formato", "Stile", "Anno", "Etichetta", "Stampa", "Stampa pi Costosa", "Prezzo medio pi alto"]
-    col_widths = [25, 30, 12, 20, 8, 20, 15, 18, 20]
+    headers = ["Artista", "Titolo", "Formato", "Stile", "Anno", "Etichetta", "Stampa", "Stampa piu Costosa", "Prezzo medio piu alto"]
+    col_widths = [25, 30, 12, 20, 8, 20, 15, 22, 22]
 
     for col, h in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
@@ -386,20 +388,18 @@ async def export_excel(user_id: str, token: str = ""):
     for v in vinili:
         fmt = str(v.get("formato", "") or "").strip().lower()
         if fmt:
-            if '7' in fmt: formati_count['7"'] += 1
-            elif '10' in fmt: formati_count['10"'] += 1
-            elif '12' in fmt: formati_count['12"'] += 1
+            if '7' in fmt:                                            formati_count['7"'] += 1
+            elif '10' in fmt:                                         formati_count['10"'] += 1
+            elif '12' in fmt:                                         formati_count['12"'] += 1
             elif '2xlp' in fmt or '2x lp' in fmt or 'double' in fmt: formati_count['2xLP'] += 1
-            elif 'lp' in fmt: formati_count['LP'] += 1
-            else: formati_count[fmt[:10]] += 1
+            elif 'lp' in fmt:                                         formati_count['LP'] += 1
+            else:                                                     formati_count[fmt[:10]] += 1
 
     last_row = ws.max_row + 2
-    total_fill = PatternFill(start_color="2d2d4e", end_color="2d2d4e", fill_type="solid")
-    total_font = Font(bold=True, color="FFFFFF")
 
     title_cell = ws.cell(row=last_row, column=1, value="RIEPILOGO FORMATI")
-    title_cell.font = total_font
-    title_cell.fill = total_fill
+    title_cell.font = Font(bold=True, color="FFFFFF")
+    title_cell.fill = PatternFill(start_color="2d2d4e", end_color="2d2d4e", fill_type="solid")
     last_row += 1
 
     totale = 0
@@ -407,8 +407,10 @@ async def export_excel(user_id: str, token: str = ""):
         count = formati_count.get(fmt, 0)
         c1 = ws.cell(row=last_row, column=1, value=fmt)
         c2 = ws.cell(row=last_row, column=2, value=count)
-        c1.font = total_font; c1.fill = total_fill
-        c2.font = total_font; c2.fill = total_fill
+        c1.font = Font(bold=True, color="FFFFFF")
+        c1.fill = PatternFill(start_color="2d2d4e", end_color="2d2d4e", fill_type="solid")
+        c2.font = Font(bold=True, color="FFFFFF")
+        c2.fill = PatternFill(start_color="2d2d4e", end_color="2d2d4e", fill_type="solid")
         totale += count
         last_row += 1
 
