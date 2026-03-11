@@ -109,7 +109,7 @@ async def cache_set(key: str, data: dict):
 # ── Discogs ───────────────────────────────────────────────────────────────────
 
 async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
-    """Trova la versione con prezzo piu alto tra quelle in vendita."""
+    """Trova la versione con prezzo più alto tra quelle disponibili su Discogs."""
     try:
         async with httpx.AsyncClient(timeout=25) as client:
             r = await client.get(
@@ -121,7 +121,7 @@ async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
                 return "", ""
 
             versions = r.json().get("versions", [])
-            print(f"DISCOGS VERSIONS COUNT: {len(versions)} for master {master_id}")
+            print(f"DISCOGS VERSIONS: {len(versions)} for master {master_id}")
 
             best_price = 0.0
             best_catno = ""
@@ -140,17 +140,10 @@ async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
                     continue
 
                 stats = stats_r.json()
-
-                # Prova lowest_price (vendite attive) poi community rating come fallback
                 lp = stats.get("lowest_price")
-                price = 0.0
-                if lp is not None:
-                    price = float(lp.get("value", 0) if isinstance(lp, dict) else lp or 0)
-
-                # Se non c'è prezzo di mercato, prova blocked_from_sale=False con num_for_sale
-                if price == 0:
-                    # Cerca prezzo nella community data della release
-                    pass
+                if lp is None:
+                    continue
+                price = float(lp.get("value", 0) if isinstance(lp, dict) else lp or 0)
 
                 if price > best_price:
                     best_price = price
@@ -158,10 +151,10 @@ async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
 
             if best_price > 0:
                 return best_catno, f"EUR {best_price:.2f}"
-            # Fallback: se nessun prezzo trovato, restituisci la prima versione con catno
+            # Fallback: restituisci il catno della prima versione con catno valido
             for v in versions:
                 catno = v.get("catno", "")
-                if catno:
+                if catno and catno.lower() != "none":
                     return catno, ""
             return "", ""
 
@@ -169,129 +162,237 @@ async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
         print(f"DISCOGS PRICE ERROR: {e}")
         return "", ""
 
-async def cerca_su_discogs(data: dict, use_cache: bool = True) -> dict:
+
+# ── Helpers ricerca Discogs ───────────────────────────────────────────────────
+
+def formato_to_discogs(fmt: str) -> str:
+    """Converte il formato utente nel tipo Discogs corrispondente."""
+    f = fmt.lower().strip()
+    if "12" in f:                          return '12"'
+    if "7" in f or "45" in f:             return '7"'
+    if "10" in f:                          return '10"'
+    if "2xlp" in f or "2x lp" in f or "double" in f: return "LP"
+    if "lp" in f or "33" in f:            return "LP"
+    if "ep" in f:                          return "EP"
+    return "Vinyl"
+
+def is_7inch(fmt: str) -> bool:
+    f = fmt.lower()
+    return "7" in f or "45" in f
+
+def extract_barcode(s: str) -> str:
+    """Estrae EAN-8/12/13 o UPC da stringa. Solo cifre, lunghezza 8/12/13."""
+    import re
+    s_clean = re.sub(r'[\s\-]', '', s or '')
+    matches = re.findall(r'\d{8,13}', s_clean)
+    for m in matches:
+        if len(m) in (8, 12, 13):
+            return m
+    return ""
+
+def split_lati(titolo: str, fmt: str) -> tuple[str, str]:
     """
-    Arricchisce i dati con Discogs.
-    Se use_cache=True controlla prima la cache Supabase.
-    Artista e titolo non vengono mai sovrascritti.
+    Separa lato A e lato B solo per 7"/45rpm.
+    Restituisce (lato_a, lato_b). lato_b è vuoto se non applicabile.
+    """
+    if not is_7inch(fmt):
+        return titolo.strip(), ""
+    for sep in [" / ", "/", " - "]:
+        if sep in titolo:
+            parts = titolo.split(sep, 1)
+            return parts[0].strip(), parts[1].strip()
+    return titolo.strip(), ""
+
+async def _discogs_search(client, params: dict) -> dict | None:
+    """Esegue una ricerca Discogs e restituisce il primo risultato vinile."""
+    try:
+        params.setdefault("type", "release")
+        params.setdefault("per_page", 5)
+        r = await client.get(
+            "https://api.discogs.com/database/search",
+            headers=DISCOGS_HEADERS(),
+            params=params
+        )
+        if r.status_code == 429:
+            print("DISCOGS RATE LIMIT")
+            return None
+        if r.status_code != 200:
+            return None
+        results = r.json().get("results", [])
+        # Preferisci risultati vinile
+        vinyl = [x for x in results if any(
+            f.lower() in ['vinyl', '7"', '10"', '12"', 'lp', 'ep']
+            for f in (x.get("format") or [])
+        )]
+        chosen = vinyl[0] if vinyl else (results[0] if results else None)
+        if chosen:
+            print(f"  → {chosen.get('title')} | fmt={chosen.get('format')} | catno={chosen.get('catno')} | year={chosen.get('year')}")
+        return chosen
+    except Exception as e:
+        print(f"DISCOGS SEARCH EXC: {e}")
+        return None
+
+async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = "") -> dict:
+    """
+    Arricchisce i dati con Discogs seguendo una cascata di ricerche
+    dal più preciso al più generico. Formato sempre specificato.
+    Lato A + Lato B usati insieme per i 7"/45rpm se presenti nel titolo.
+    Artista e titolo originali non vengono mai sovrascritti.
     """
     if not DISCOGS_TOKEN:
         return data
 
-    artista_orig = data.get("artista", "")
-    titolo_orig  = data.get("titolo", "")
-    ck = cache_key(artista_orig, titolo_orig)
+    artista   = (data.get("artista")   or "").strip()
+    titolo    = (data.get("titolo")    or "").strip()
+    fmt_raw   = (data.get("formato")   or "").strip()
+    etichetta = (data.get("etichetta") or "").strip()
+    anno      = (data.get("anno")      or "").strip()
+    catno     = (data.get("stampa")    or "").strip()
 
-    # Controlla cache
-    if use_cache and artista_orig:
+    ck = cache_key(artista, titolo)
+
+    # ── Cache ────────────────────────────────────────────────────────────────
+    if use_cache and artista:
         cached = await cache_get(ck)
         if cached:
-            # Mantieni artista e titolo originali, usa il resto dalla cache
             return {
-                "artista":        artista_orig,
-                "titolo":         titolo_orig,
-                "formato":        data.get("formato") or cached.get("formato", ""),
-                "stile":          data.get("stile") or cached.get("stile", ""),
-                "anno":           data.get("anno") or cached.get("anno", ""),
+                "artista":        artista,
+                "titolo":         titolo,
+                "formato":        data.get("formato")   or cached.get("formato", ""),
+                "stile":          data.get("stile")     or cached.get("stile", ""),
+                "anno":           data.get("anno")      or cached.get("anno", ""),
                 "etichetta":      data.get("etichetta") or cached.get("etichetta", ""),
-                "stampa":         data.get("stampa") or cached.get("stampa", ""),
+                "stampa":         data.get("stampa")    or cached.get("stampa", ""),
                 "stampa_costosa": cached.get("stampa_costosa", ""),
                 "prezzo_max":     cached.get("prezzo_max", ""),
             }
 
-    query_parts = []
-    if data.get("stampa"):   query_parts.append(data["stampa"])
-    if data.get("artista"):  query_parts.append(data["artista"])
-    if data.get("titolo"):   query_parts.append(data["titolo"])
-    if data.get("etichetta"): query_parts.append(data["etichetta"])
+    fmt_discogs = formato_to_discogs(fmt_raw)
+    lato_a, lato_b = split_lati(titolo, fmt_raw)
+    ha_lati = bool(lato_b)  # True solo se 7"/45rpm con split trovato
 
-    if not query_parts:
-        return data
+    print(f"DISCOGS CERCA: artista={artista!r} lato_a={lato_a!r} lato_b={lato_b!r} "
+          f"fmt={fmt_discogs!r} etichetta={etichetta!r} anno={anno!r} catno={catno!r}")
 
-    query = " ".join(query_parts)
-    print(f"DISCOGS QUERY: {query}")
+    match = None
+    async with httpx.AsyncClient(timeout=15) as client:
 
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            params = {"q": query, "type": "release", "per_page": 3}
-            if data.get("stampa"):
-                params["catno"] = data["stampa"]
+        # 0. barcode → match esatto sulla pressatura
+        if barcode:
+            print(f"Tentativo 0: barcode={barcode}")
+            match = await _discogs_search(client, {"barcode": barcode})
+            if match: print(f"MATCH via barcode!")
 
-            r = await client.get(
-                "https://api.discogs.com/database/search",
-                headers=DISCOGS_HEADERS(),
-                params=params
-            )
-            if r.status_code != 200:
-                return data
+        # 1. catno + etichetta + formato specifico
+        if not match and catno and not catno.isdigit():
+            print("Tentativo 1: catno + etichetta + formato")
+            p = {"catno": catno, "format": fmt_discogs}
+            if etichetta: p["label"] = etichetta
+            match = await _discogs_search(client, p)
 
-            results = r.json().get("results", [])
-            if not results:
-                return data
+        # 2. catno + formato (senza etichetta)
+        if not match and catno and not catno.isdigit():
+            print("Tentativo 2: catno + formato")
+            match = await _discogs_search(client, {"catno": catno, "format": fmt_discogs})
 
-            match = results[0]
-            print(f"DISCOGS MATCH: {match.get('title')} {match.get('year')}")
+        # 3. lato A + lato B + etichetta + formato (solo 7"/45rpm con split)
+        if not match and ha_lati and etichetta:
+            print("Tentativo 3: latoA + latoB + etichetta + formato")
+            match = await _discogs_search(client, {
+                "artist": artista, "title": f"{lato_a} {lato_b}",
+                "label": etichetta, "format": fmt_discogs
+            })
 
-            # Estrai campi da Discogs
-            title_full = match.get("title", "")
-            disc_artista = artista_orig
-            disc_titolo  = titolo_orig
-            if " - " in title_full:
-                parts = title_full.split(" - ", 1)
-                disc_artista = parts[0].strip()
-                disc_titolo  = parts[1].strip()
+        # 4. lato A + lato B + formato (senza etichetta, solo 7"/45rpm)
+        if not match and ha_lati:
+            print("Tentativo 4: latoA + latoB + formato")
+            match = await _discogs_search(client, {
+                "artist": artista, "title": f"{lato_a} {lato_b}",
+                "format": fmt_discogs
+            })
 
-            styles   = match.get("style", []) or match.get("genre", [])
-            stile    = ", ".join(styles[:2]) if styles else data.get("stile", "")
-            formats  = match.get("format", [])
-            formato  = formats[0] if formats else data.get("formato", "")
-            labels   = match.get("label", [])
-            etichetta = labels[0] if labels else data.get("etichetta", "")
-            anno     = str(match.get("year", "")) or data.get("anno", "")
-            # catno: prova prima quello dell'utente, poi quello del match
-            # Se ancora vuoto, chiedi alla API release diretta
-            stampa = data.get("stampa", "") or match.get("catno", "")
-            if not stampa and match.get("id"):
-                try:
-                    rel_r = await client.get(
-                        f"https://api.discogs.com/releases/{match['id']}",
-                        headers=DISCOGS_HEADERS()
-                    )
-                    if rel_r.status_code == 200:
-                        stampa = rel_r.json().get("labels", [{}])[0].get("catno", "") or ""
-                except Exception:
-                    pass
+        # 5. artista + titolo + etichetta + formato specifico
+        if not match and artista and lato_a:
+            print("Tentativo 5: artista + titolo + etichetta + formato")
+            p = {"artist": artista, "title": lato_a, "format": fmt_discogs}
+            if etichetta: p["label"] = etichetta
+            match = await _discogs_search(client, p)
 
-            stampa_costosa = ""
-            prezzo_max     = ""
-            master_id = match.get("master_id")
-            if master_id:
-                stampa_costosa, prezzo_max = await cerca_prezzo_max_discogs(master_id)
+        # 6. artista + titolo + etichetta + anno + formato
+        if not match and artista and lato_a and anno:
+            print("Tentativo 6: artista + titolo + etichetta + anno + formato")
+            p = {"artist": artista, "title": lato_a, "format": fmt_discogs, "year": anno}
+            if etichetta: p["label"] = etichetta
+            match = await _discogs_search(client, p)
 
-            result = {
-                "artista":        artista_orig,   # mai sovrascritto
-                "titolo":         titolo_orig,    # mai sovrascritto
-                "formato":        data.get("formato") or formato,
-                "stile":          data.get("stile") or stile,
-                "anno":           data.get("anno") or anno,
-                "etichetta":      data.get("etichetta") or etichetta,
-                "stampa":         stampa,
-                "stampa_costosa": stampa_costosa,
-                "prezzo_max":     prezzo_max,
-            }
+        # 7. artista + titolo + formato (fallback minimo)
+        if not match and artista and lato_a:
+            print("Tentativo 7: artista + titolo + formato (fallback)")
+            match = await _discogs_search(client, {
+                "artist": artista, "title": lato_a, "format": fmt_discogs
+            })
 
-            # Salva in cache per uso futuro
-            await cache_set(ck, {**result,
-                "artista": disc_artista, "titolo": disc_titolo})
+        if not match:
+            print("DISCOGS: nessun match trovato")
+            return data
 
-            print(f"DISCOGS ENRICHED: {result}")
-            return result
+        # ── Estrai dati dal match ─────────────────────────────────────────────
+        print(f"DISCOGS MATCH FINALE: {match.get('title')} | {match.get('format')} | {match.get('year')}")
 
-    except Exception as e:
-        print(f"DISCOGS EXCEPTION: {e}")
-        return data
+        title_full = match.get("title", "")
+        # Non sovrascrivere mai artista e titolo originali
+        styles    = match.get("style", []) or match.get("genre", [])
+        stile     = ", ".join(styles[:2]) if styles else data.get("stile", "")
+        formats   = match.get("format", [])
+        formato   = data.get("formato") or (formats[0] if formats else "")
+        labels    = match.get("label", [])
+        etich_out = data.get("etichetta") or (labels[0] if labels else "")
+        anno_out  = data.get("anno") or str(match.get("year", ""))
+        # Catno: quello dell'utente ha priorità, poi quello del match
+        stampa    = catno or match.get("catno", "")
+        # Se catno dal match sembra un barcode, scartalo
+        if stampa and stampa.isdigit() and len(stampa) >= 10:
+            stampa = ""
+        # Se ancora vuoto, prova a recuperarlo dalla release diretta
+        if not stampa and match.get("id"):
+            try:
+                rel_r = await client.get(
+                    f"https://api.discogs.com/releases/{match['id']}",
+                    headers=DISCOGS_HEADERS()
+                )
+                if rel_r.status_code == 200:
+                    rel_labels = rel_r.json().get("labels", [])
+                    stampa = rel_labels[0].get("catno", "") if rel_labels else ""
+                    if stampa and stampa.lower() == "none":
+                        stampa = ""
+            except Exception:
+                pass
 
-# ── Auth ──────────────────────────────────────────────────────────────────────
+        # Stampa costosa e prezzo dal master
+        stampa_costosa = ""
+        prezzo_max     = ""
+        master_id = match.get("master_id")
+        if master_id:
+            stampa_costosa, prezzo_max = await cerca_prezzo_max_discogs(master_id)
+
+        result = {
+            "artista":        artista,
+            "titolo":         titolo,
+            "formato":        formato,
+            "stile":          stile,
+            "anno":           anno_out,
+            "etichetta":      etich_out,
+            "stampa":         stampa,
+            "stampa_costosa": stampa_costosa,
+            "prezzo_max":     prezzo_max,
+        }
+        print(f"DISCOGS RESULT: {result}")
+
+        # Salva in cache
+        await cache_set(ck, result)
+        return result
+
+
 
 @app.post("/api/register")
 async def register(data: RegisterData):
@@ -344,7 +445,7 @@ async def scan_label(file: UploadFile = File(...)):
             )
             prompt = """Analizza questa immagine di un'etichetta di disco vinile.
 Estrai le informazioni visibili e rispondi SOLO con JSON valido senza markdown:
-{"artista":"","titolo":"","formato":"","stile":"","anno":"","etichetta":"","stampa":""}
+{"artista":"","titolo":"","formato":"","stile":"","anno":"","etichetta":"","stampa":"","barcode":""}
 
 REGOLE FONDAMENTALI:
 - "stampa" = numero di catalogo (catalog number). Esempi validi: CBS 1234, HS-032, ATL-50234, 2C 006-93752, CLMN-126.
@@ -357,7 +458,8 @@ REGOLE FONDAMENTALI:
 - "stile" = genere musicale. Se non visibile deducilo dall'etichetta (Blue Note=Jazz, Motown=Soul)
 - "anno" = anno a 4 cifre. NON confondere con numeri di catalogo
 - "etichetta" = nome etichetta discografica
-- Lascia vuoto qualsiasi campo non chiaramente visibile. NON inventare."""
+- Lascia vuoto qualsiasi campo non chiaramente visibile. NON inventare.
+- "barcode" = codice a barre EAN/UPC numerico (8, 12 o 13 cifre) stampato sotto il barcode grafico. NON confonderlo col catalog number."""
             payload = {"contents": [{"parts": [
                 {"text": prompt},
                 {"inline_data": {"mime_type": mime, "data": b64}}
@@ -378,7 +480,16 @@ REGOLE FONDAMENTALI:
         except Exception as e:
             print(f"GEMINI EXCEPTION: {e}")
 
-    result = await cerca_su_discogs(gemini_data, use_cache=True)
+    # Estrai barcode da Gemini (non viene salvato nel DB)
+    barcode_scan = extract_barcode(str(gemini_data.pop("barcode", "") or ""))
+    if not barcode_scan:
+        # Prova anche dal campo stampa (a volte Gemini mette il barcode lì)
+        bc_from_stampa = extract_barcode(str(gemini_data.get("stampa", "") or ""))
+        if bc_from_stampa:
+            barcode_scan = bc_from_stampa
+            gemini_data["stampa"] = ""  # era un barcode, svuota stampa
+    print(f"BARCODE SCAN: {barcode_scan!r}")
+    result = await cerca_su_discogs(gemini_data, use_cache=True, barcode=barcode_scan)
     result["catno"] = result.get("stampa", "")
     return result
 
@@ -477,6 +588,14 @@ async def import_excel(
                 stampa         = str(row[6] or "").strip()
                 stampa_costosa = str(row[7] or "").strip() if len(row) > 7 else ""
                 prezzo_max     = str(row[8] or "").strip() if len(row) > 8 else ""
+                # Colonna 9 opzionale: barcode (solo per ricerca, non salvato)
+                barcode_raw    = str(row[9] or "").strip() if len(row) > 9 else ""
+                barcode_xl     = extract_barcode(barcode_raw) if barcode_raw else ""
+                # Se catno sembra un barcode, usalo come barcode e svuota stampa
+                if stampa and stampa.isdigit() and len(stampa) >= 8:
+                    if not barcode_xl:
+                        barcode_xl = extract_barcode(stampa)
+                    stampa = ""
 
                 # Manda progresso al frontend
                 yield f"data: {json.dumps({'done': False, 'current': idx+1, 'total': total, 'artista': artista}, ensure_ascii=False)}\n\n"
@@ -493,7 +612,7 @@ async def import_excel(
                             "stampa": stampa,
                             "stampa_costosa": stampa_costosa,
                             "prezzo_max": prezzo_max,
-                        }, use_cache=True)
+                        }, use_cache=True, barcode=barcode_xl)
                         # Aggiorna solo campi vuoti, mai artista/titolo
                         if not formato:        formato        = enriched.get("formato", "")
                         if not stile:          stile          = enriched.get("stile", "")
