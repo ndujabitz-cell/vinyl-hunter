@@ -4,7 +4,7 @@ import json
 import base64
 import httpx
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 from openpyxl import Workbook, load_workbook
@@ -52,35 +52,84 @@ def supa_headers(token: str = None, use_secret: bool = False):
     h["Authorization"] = f"Bearer {token}" if token else f"Bearer {key}"
     return h
 
-async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
-    """
-    Cerca tutte le versioni di un master su Discogs.
-    Usa /marketplace/stats/{release_id} che restituisce:
-      - lowest_price: {"currency": "EUR", "value": 5.0}
-      - num_for_sale: int
-    Non esiste avg_price nelle API pubbliche Discogs, quindi:
-    usiamo il highest 'lowest_price' tra tutte le versioni come proxy
-    del valore di mercato della stampa piu pregiata.
-    """
+# ── Cache Discogs su Supabase ─────────────────────────────────────────────────
+
+def cache_key(artista: str, titolo: str) -> str:
+    """Chiave normalizzata per la cache: artista|titolo in minuscolo."""
+    a = (artista or "").strip().lower()
+    t = (titolo or "").strip().lower()
+    return f"{a}|{t}"
+
+async def cache_get(key: str) -> dict | None:
+    """Legge un record dalla cache Discogs su Supabase."""
     try:
-        async with httpx.AsyncClient(timeout=20) as client:
-            # Prendi tutte le versioni del master
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                f"{SUPABASE_URL}/rest/v1/discogs_cache",
+                headers={**supa_headers(use_secret=True), "Accept": "application/json"},
+                params={"cache_key": f"eq.{key}", "limit": "1"}
+            )
+            if r.status_code == 200:
+                rows = r.json()
+                if rows:
+                    print(f"CACHE HIT: {key}")
+                    return rows[0]
+    except Exception as e:
+        print(f"CACHE GET ERROR: {e}")
+    return None
+
+async def cache_set(key: str, data: dict):
+    """Salva un record nella cache Discogs su Supabase (upsert)."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            payload = {
+                "cache_key": key,
+                "artista": data.get("artista", ""),
+                "titolo": data.get("titolo", ""),
+                "etichetta": data.get("etichetta", ""),
+                "stile": data.get("stile", ""),
+                "anno": data.get("anno", ""),
+                "formato": data.get("formato", ""),
+                "stampa": data.get("stampa", ""),
+                "stampa_costosa": data.get("stampa_costosa", ""),
+                "prezzo_max": data.get("prezzo_max", ""),
+            }
+            await client.post(
+                f"{SUPABASE_URL}/rest/v1/discogs_cache",
+                headers={
+                    **supa_headers(use_secret=True),
+                    "Prefer": "resolution=merge-duplicates,return=minimal"
+                },
+                json=payload
+            )
+            print(f"CACHE SET: {key}")
+    except Exception as e:
+        print(f"CACHE SET ERROR: {e}")
+
+# ── Discogs ───────────────────────────────────────────────────────────────────
+
+async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
+    """Trova la versione con prezzo piu alto tra quelle in vendita."""
+    try:
+        async with httpx.AsyncClient(timeout=25) as client:
             r = await client.get(
                 f"https://api.discogs.com/masters/{master_id}/versions",
                 headers=DISCOGS_HEADERS(),
-                params={"per_page": 100, "sort": "released", "sort_order": "asc"}
+                params={"per_page": 100}
             )
             if r.status_code != 200:
                 return "", ""
 
             versions = r.json().get("versions", [])
+            print(f"DISCOGS VERSIONS COUNT: {len(versions)} for master {master_id}")
+
             best_price = 0.0
             best_catno = ""
 
             for v in versions:
                 release_id = v.get("id")
                 catno = v.get("catno", "")
-                if not release_id or not catno:
+                if not release_id:
                     continue
 
                 stats_r = await client.get(
@@ -91,21 +140,18 @@ async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
                     continue
 
                 stats = stats_r.json()
-                num_for_sale = stats.get("num_for_sale", 0) or 0
-
-                # Considera solo versioni effettivamente in vendita
+                num_for_sale = int(stats.get("num_for_sale") or 0)
                 if num_for_sale == 0:
                     continue
 
-                lp = stats.get("lowest_price") or {}
-                if isinstance(lp, dict):
-                    price = float(lp.get("value", 0) or 0)
-                else:
-                    price = float(lp or 0)
+                lp = stats.get("lowest_price")
+                if lp is None:
+                    continue
+                price = float(lp.get("value", 0) if isinstance(lp, dict) else lp or 0)
 
                 if price > best_price:
                     best_price = price
-                    best_catno = catno
+                    best_catno = catno if catno else f"ID:{release_id}"
 
             if best_price > 0:
                 return best_catno, f"EUR {best_price:.2f}"
@@ -115,22 +161,44 @@ async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
         print(f"DISCOGS PRICE ERROR: {e}")
         return "", ""
 
-async def cerca_su_discogs(gemini_data: dict) -> dict:
+async def cerca_su_discogs(data: dict, use_cache: bool = True) -> dict:
+    """
+    Arricchisce i dati con Discogs.
+    Se use_cache=True controlla prima la cache Supabase.
+    Artista e titolo non vengono mai sovrascritti.
+    """
     if not DISCOGS_TOKEN:
-        return gemini_data
+        return data
+
+    artista_orig = data.get("artista", "")
+    titolo_orig  = data.get("titolo", "")
+    ck = cache_key(artista_orig, titolo_orig)
+
+    # Controlla cache
+    if use_cache and artista_orig:
+        cached = await cache_get(ck)
+        if cached:
+            # Mantieni artista e titolo originali, usa il resto dalla cache
+            return {
+                "artista":        artista_orig,
+                "titolo":         titolo_orig,
+                "formato":        data.get("formato") or cached.get("formato", ""),
+                "stile":          data.get("stile") or cached.get("stile", ""),
+                "anno":           data.get("anno") or cached.get("anno", ""),
+                "etichetta":      data.get("etichetta") or cached.get("etichetta", ""),
+                "stampa":         data.get("stampa") or cached.get("stampa", ""),
+                "stampa_costosa": cached.get("stampa_costosa", ""),
+                "prezzo_max":     cached.get("prezzo_max", ""),
+            }
 
     query_parts = []
-    if gemini_data.get("stampa"):
-        query_parts.append(gemini_data["stampa"])
-    if gemini_data.get("artista"):
-        query_parts.append(gemini_data["artista"])
-    if gemini_data.get("titolo"):
-        query_parts.append(gemini_data["titolo"])
-    if gemini_data.get("etichetta"):
-        query_parts.append(gemini_data["etichetta"])
+    if data.get("stampa"):   query_parts.append(data["stampa"])
+    if data.get("artista"):  query_parts.append(data["artista"])
+    if data.get("titolo"):   query_parts.append(data["titolo"])
+    if data.get("etichetta"): query_parts.append(data["etichetta"])
 
     if not query_parts:
-        return gemini_data
+        return data
 
     query = " ".join(query_parts)
     print(f"DISCOGS QUERY: {query}")
@@ -138,8 +206,8 @@ async def cerca_su_discogs(gemini_data: dict) -> dict:
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             params = {"q": query, "type": "release", "per_page": 3}
-            if gemini_data.get("stampa"):
-                params["catno"] = gemini_data["stampa"]
+            if data.get("stampa"):
+                params["catno"] = data["stampa"]
 
             r = await client.get(
                 "https://api.discogs.com/database/search",
@@ -147,58 +215,63 @@ async def cerca_su_discogs(gemini_data: dict) -> dict:
                 params=params
             )
             if r.status_code != 200:
-                return gemini_data
+                return data
 
             results = r.json().get("results", [])
             if not results:
-                return gemini_data
+                return data
 
             match = results[0]
             print(f"DISCOGS MATCH: {match.get('title')} {match.get('year')}")
 
+            # Estrai campi da Discogs
             title_full = match.get("title", "")
-            artista = gemini_data.get("artista", "")
-            titolo = gemini_data.get("titolo", "")
+            disc_artista = artista_orig
+            disc_titolo  = titolo_orig
             if " - " in title_full:
                 parts = title_full.split(" - ", 1)
-                artista = parts[0].strip()
-                titolo = parts[1].strip()
+                disc_artista = parts[0].strip()
+                disc_titolo  = parts[1].strip()
 
-            styles = match.get("style", []) or match.get("genre", [])
-            stile = ", ".join(styles[:2]) if styles else gemini_data.get("stile", "")
-
-            formats = match.get("format", [])
-            formato = formats[0] if formats else gemini_data.get("formato", "")
-
-            labels = match.get("label", [])
-            etichetta = labels[0] if labels else gemini_data.get("etichetta", "")
-
-            anno = str(match.get("year", "")) or gemini_data.get("anno", "")
-            stampa = gemini_data.get("stampa", "") or match.get("catno", "")
+            styles   = match.get("style", []) or match.get("genre", [])
+            stile    = ", ".join(styles[:2]) if styles else data.get("stile", "")
+            formats  = match.get("format", [])
+            formato  = formats[0] if formats else data.get("formato", "")
+            labels   = match.get("label", [])
+            etichetta = labels[0] if labels else data.get("etichetta", "")
+            anno     = str(match.get("year", "")) or data.get("anno", "")
+            stampa   = data.get("stampa", "") or match.get("catno", "")
 
             stampa_costosa = ""
-            prezzo_max = ""
+            prezzo_max     = ""
             master_id = match.get("master_id")
             if master_id:
                 stampa_costosa, prezzo_max = await cerca_prezzo_max_discogs(master_id)
 
             result = {
-                "artista": artista or gemini_data.get("artista", ""),
-                "titolo": titolo or gemini_data.get("titolo", ""),
-                "formato": formato or gemini_data.get("formato", ""),
-                "stile": stile or gemini_data.get("stile", ""),
-                "anno": anno or gemini_data.get("anno", ""),
-                "etichetta": etichetta or gemini_data.get("etichetta", ""),
-                "stampa": stampa,
+                "artista":        artista_orig,   # mai sovrascritto
+                "titolo":         titolo_orig,    # mai sovrascritto
+                "formato":        data.get("formato") or formato,
+                "stile":          data.get("stile") or stile,
+                "anno":           data.get("anno") or anno,
+                "etichetta":      data.get("etichetta") or etichetta,
+                "stampa":         stampa,
                 "stampa_costosa": stampa_costosa,
-                "prezzo_max": prezzo_max,
+                "prezzo_max":     prezzo_max,
             }
+
+            # Salva in cache per uso futuro
+            await cache_set(ck, {**result,
+                "artista": disc_artista, "titolo": disc_titolo})
+
             print(f"DISCOGS ENRICHED: {result}")
             return result
 
     except Exception as e:
         print(f"DISCOGS EXCEPTION: {e}")
-        return gemini_data
+        return data
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
 
 @app.post("/api/register")
 async def register(data: RegisterData):
@@ -230,6 +303,8 @@ async def login(data: LoginData):
         "nome": res["user"].get("user_metadata", {}).get("nome", data.email)
     }
 
+# ── Scan ──────────────────────────────────────────────────────────────────────
+
 @app.post("/api/scan")
 async def scan_label(file: UploadFile = File(...)):
     content = await file.read()
@@ -253,49 +328,41 @@ Estrai le informazioni visibili e rispondi SOLO con JSON valido senza markdown:
 
 REGOLE FONDAMENTALI:
 - "stampa" = numero di catalogo (catalog number). Esempi validi: CBS 1234, HS-032, ATL-50234, 2C 006-93752, CLMN-126.
-  Il catalog number e' stampato vicino al logo dell'etichetta, sul bordo dell'etichetta, o inciso nella plastica.
+  Il catalog number e' stampato vicino al logo dell'etichetta, sul bordo, o inciso nella plastica.
   NON e' il codice a barre EAN/barcode (sequenza numerica lunga tipo 3700426913386).
   NON e' il numero ISRC. Se non trovi un catalog number chiaro, lascia "stampa" vuoto.
-- "artista" = nome dell'artista o band principale sull'etichetta
-- "titolo" = titolo del brano o album. Se ci sono piu brani (Side A / Side B) usa il titolo del Side A
-- "formato" = 7", 10", 12", LP, EP, 45rpm, 33rpm. Se non visibile deducilo dalla dimensione apparente
-- "stile" = genere musicale. Se non visibile deducilo dall'etichetta (Blue Note=Jazz, Motown=Soul, ecc.)
-- "anno" = anno a 4 cifre (es. 1975). NON confondere con numeri di catalogo
-- "etichetta" = nome etichetta discografica (es: Atlantic, Columbia, Heavenly Sweetness)
+- "artista" = nome dell'artista o band principale
+- "titolo" = titolo del brano/album. Se ci sono Side A / Side B usa il titolo del Side A
+- "formato" = 7", 10", 12", LP, EP, 45rpm, 33rpm
+- "stile" = genere musicale. Se non visibile deducilo dall'etichetta (Blue Note=Jazz, Motown=Soul)
+- "anno" = anno a 4 cifre. NON confondere con numeri di catalogo
+- "etichetta" = nome etichetta discografica
 - Lascia vuoto qualsiasi campo non chiaramente visibile. NON inventare."""
-            payload = {
-                "contents": [{
-                    "parts": [
-                        {"text": prompt},
-                        {"inline_data": {"mime_type": mime, "data": b64}}
-                    ]
-                }]
-            }
+            payload = {"contents": [{"parts": [
+                {"text": prompt},
+                {"inline_data": {"mime_type": mime, "data": b64}}
+            ]}]}
             async with httpx.AsyncClient(timeout=30) as client:
                 r = await client.post(gemini_url, json=payload)
-            print(f"GEMINI STATUS: {r.status_code}")
             if r.status_code == 200:
                 text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
-                print(f"GEMINI TEXT: {text[:500]}")
                 text = text.strip().replace("```json", "").replace("```", "").strip()
                 try:
                     parsed = json.loads(text)
-                    # Sanity check: se "stampa" sembra un barcode EAN (solo cifre, >10 char) -> svuota
                     stampa_val = str(parsed.get("stampa", "")).strip()
                     if stampa_val.isdigit() and len(stampa_val) >= 10:
-                        print(f"BARCODE DETECTED, clearing stampa: {stampa_val}")
                         parsed["stampa"] = ""
                     gemini_data.update(parsed)
                 except Exception as pe:
                     print(f"JSON PARSE ERROR: {pe}")
-            else:
-                print(f"GEMINI ERROR: {r.text[:300]}")
         except Exception as e:
             print(f"GEMINI EXCEPTION: {e}")
 
-    result = await cerca_su_discogs(gemini_data)
+    result = await cerca_su_discogs(gemini_data, use_cache=True)
     result["catno"] = result.get("stampa", "")
     return result
+
+# ── Vinili CRUD ───────────────────────────────────────────────────────────────
 
 @app.post("/api/vinile")
 async def add_vinyl(v: VinylData):
@@ -310,7 +377,6 @@ async def add_vinyl(v: VinylData):
                 "stampa_costosa": v.stampa_costosa, "prezzo_max": v.prezzo_max
             }
         )
-    print(f"SAVE STATUS: {r.status_code} RESPONSE: {r.text[:200]}")
     if r.status_code not in (200, 201):
         raise HTTPException(400, f"Errore salvataggio: {r.status_code} - {r.text[:100]}")
     return {"status": "ok"}
@@ -348,50 +414,103 @@ async def delete_catalog(user_id: str, token: str):
         raise HTTPException(400, "Errore eliminazione catalogo")
     return {"status": "deleted"}
 
+# ── Import Excel con SSE progress + arricchimento + cache ─────────────────────
+
 @app.post("/api/import_excel")
 async def import_excel(
     user_id: str = Form(...),
     token: str = Form(...),
     file: UploadFile = File(...)
 ):
-    content = await file.read()
-    wb = load_workbook(io.BytesIO(content))
+    content_bytes = await file.read()
+    wb = load_workbook(io.BytesIO(content_bytes))
     ws = wb.active
-    imported = 0
     SKIP = {
         '7"', '10"', '12"', '4"', 'lp', '2xlp', '2x lp', 'ep',
         'single', 'riepilogo formati', 'totale vinili', 'artista'
     }
 
-    async with httpx.AsyncClient() as client:
-        for row in ws.iter_rows(min_row=2, values_only=True):
-            if not row or not row[0]:
-                continue
-            artista = str(row[0] or "").strip()
-            if artista.lower() in SKIP:
-                continue
-            # Salta righe del riepilogo (es. "LP" con numero a fianco)
-            if len(artista) <= 5 and len(row) > 1 and str(row[1] or "").strip().isdigit():
-                continue
-            await client.post(
-                f"{SUPABASE_URL}/rest/v1/vinili",
-                headers=supa_headers(token),
-                json={
-                    "user_id": user_id,
-                    "artista": artista,
-                    "titolo": str(row[1] or ""),
-                    "formato": str(row[2] or ""),
-                    "stile": str(row[3] or ""),
-                    "anno": str(row[4] or ""),
-                    "etichetta": str(row[5] or ""),
-                    "stampa": str(row[6] or ""),
-                    "stampa_costosa": str(row[7] or "") if len(row) > 7 else "",
-                    "prezzo_max": str(row[8] or "") if len(row) > 8 else ""
-                }
-            )
-            imported += 1
-    return {"status": "ok", "imported": imported}
+    rows = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if not row or not row[0]:
+            continue
+        artista = str(row[0] or "").strip()
+        if artista.lower() in SKIP:
+            continue
+        if len(artista) <= 5 and len(row) > 1 and str(row[1] or "").strip().isdigit():
+            continue
+        rows.append(row)
 
+    total = len(rows)
+
+    async def generate():
+        imported = 0
+        async with httpx.AsyncClient(timeout=20) as client:
+            for idx, row in enumerate(rows):
+                artista        = str(row[0] or "").strip()
+                titolo         = str(row[1] or "").strip()
+                formato        = str(row[2] or "").strip()
+                stile          = str(row[3] or "").strip()
+                anno           = str(row[4] or "").strip()
+                etichetta      = str(row[5] or "").strip()
+                stampa         = str(row[6] or "").strip()
+                stampa_costosa = str(row[7] or "").strip() if len(row) > 7 else ""
+                prezzo_max     = str(row[8] or "").strip() if len(row) > 8 else ""
+
+                # Manda progresso al frontend
+                yield f"data: {json.dumps({'done': False, 'current': idx+1, 'total': total, 'artista': artista}, ensure_ascii=False)}\n\n"
+
+                # Arricchisci solo se mancano campi (mai artista/titolo)
+                needs_enrich = not all([stampa, etichetta, stile, anno, stampa_costosa, prezzo_max])
+
+                if needs_enrich and DISCOGS_TOKEN:
+                    try:
+                        enriched = await cerca_su_discogs({
+                            "artista": artista, "titolo": titolo,
+                            "formato": formato, "stile": stile,
+                            "anno": anno, "etichetta": etichetta,
+                            "stampa": stampa,
+                            "stampa_costosa": stampa_costosa,
+                            "prezzo_max": prezzo_max,
+                        }, use_cache=True)
+                        # Aggiorna solo campi vuoti, mai artista/titolo
+                        if not formato:        formato        = enriched.get("formato", "")
+                        if not stile:          stile          = enriched.get("stile", "")
+                        if not anno:           anno           = enriched.get("anno", "")
+                        if not etichetta:      etichetta      = enriched.get("etichetta", "")
+                        if not stampa:         stampa         = enriched.get("stampa", "")
+                        if not stampa_costosa: stampa_costosa = enriched.get("stampa_costosa", "")
+                        if not prezzo_max:     prezzo_max     = enriched.get("prezzo_max", "")
+                    except Exception as e:
+                        print(f"ENRICH ERROR row {idx}: {e}")
+
+                try:
+                    await client.post(
+                        f"{SUPABASE_URL}/rest/v1/vinili",
+                        headers=supa_headers(token),
+                        json={
+                            "user_id": user_id,
+                            "artista": artista, "titolo": titolo,
+                            "formato": formato, "stile": stile,
+                            "anno": anno, "etichetta": etichetta,
+                            "stampa": stampa,
+                            "stampa_costosa": stampa_costosa,
+                            "prezzo_max": prezzo_max,
+                        }
+                    )
+                    imported += 1
+                except Exception as e:
+                    print(f"SAVE ERROR row {idx}: {e}")
+
+        yield f"data: {json.dumps({'done': True, 'imported': imported})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
+
+# ── Export Excel ──────────────────────────────────────────────────────────────
 
 @app.get("/api/export_excel/{user_id}")
 async def export_excel(user_id: str, token: str = ""):
@@ -408,14 +527,11 @@ async def export_excel(user_id: str, token: str = ""):
     ws = wb.active
     ws.title = "Catalogo Vinili"
 
-    # ── Intestazioni ──────────────────────────────────────────
     header_fill = PatternFill(start_color="1a1a2e", end_color="1a1a2e", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True, size=11)
-    col_headers = [
-        "Artista", "Titolo", "Formato", "Stile", "Anno",
-        "Etichetta", "Stampa", "Stampa piu Costosa", "Prezzo medio piu alto"
-    ]
-    col_widths = [25, 30, 12, 20, 8, 20, 15, 22, 22]
+    col_headers = ["Artista", "Titolo", "Formato", "Stile", "Anno",
+                   "Etichetta", "Stampa", "Stampa piu Costosa", "Prezzo medio piu alto"]
+    col_widths   = [25, 30, 12, 20, 8, 20, 15, 22, 22]
 
     for col, h in enumerate(col_headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
@@ -423,7 +539,6 @@ async def export_excel(user_id: str, token: str = ""):
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center")
 
-    # ── Righe dati ────────────────────────────────────────────
     for row_idx, v in enumerate(vinili, 2):
         ws.cell(row=row_idx, column=1, value=v.get("artista", ""))
         ws.cell(row=row_idx, column=2, value=v.get("titolo", ""))
@@ -438,46 +553,28 @@ async def export_excel(user_id: str, token: str = ""):
     for col, width in enumerate(col_widths, 1):
         ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = width
 
-    # ── Riepilogo formati ─────────────────────────────────────
-    # Conta TUTTI i vinili indipendentemente dal formato riconosciuto
     formati_count = Counter()
-    totale_reale = len(vinili)  # contatore reale = tutte le righe del DB
+    totale_reale  = len(vinili)
 
     for v in vinili:
         fmt = str(v.get("formato", "") or "").strip().lower()
-        if not fmt:
-            formati_count["altro"] += 1
-        elif '7' in fmt:
-            formati_count['7"'] += 1
-        elif '10' in fmt:
-            formati_count['10"'] += 1
-        elif '12' in fmt:
-            formati_count['12"'] += 1
-        elif '2xlp' in fmt or '2x lp' in fmt or 'double' in fmt:
-            formati_count['2xLP'] += 1
-        elif 'lp' in fmt:
-            formati_count['LP'] += 1
-        elif 'ep' in fmt:
-            formati_count['EP'] += 1
-        elif '45' in fmt:
-            formati_count['45rpm'] += 1
-        elif '33' in fmt:
-            formati_count['33rpm'] += 1
-        else:
-            formati_count[fmt[:10]] += 1
+        if not fmt:                                                   formati_count["altro"] += 1
+        elif '7' in fmt or '45' in fmt:                              formati_count['7"'] += 1
+        elif '10' in fmt:                                            formati_count['10"'] += 1
+        elif '12' in fmt:                                            formati_count['12"'] += 1
+        elif '2xlp' in fmt or '2x lp' in fmt or 'double' in fmt:    formati_count['2xLP'] += 1
+        elif 'lp' in fmt or '33' in fmt:                             formati_count['LP'] += 1
+        elif 'ep' in fmt:                                            formati_count['EP'] += 1
+        else:                                                        formati_count[fmt[:10]] += 1
 
     last_row = ws.max_row + 2
-
-    # Titolo riepilogo
     title_cell = ws.cell(row=last_row, column=1, value="RIEPILOGO FORMATI")
     title_cell.font = Font(bold=True, color="FFFFFF")
     title_cell.fill = PatternFill(start_color="2d2d4e", end_color="2d2d4e", fill_type="solid")
     last_row += 1
 
-    # Righe per formato
     for fmt, count in sorted(formati_count.items()):
-        if count == 0:
-            continue
+        if count == 0: continue
         c1 = ws.cell(row=last_row, column=1, value=fmt)
         c2 = ws.cell(row=last_row, column=2, value=count)
         c1.font = Font(bold=True, color="FFFFFF")
@@ -486,7 +583,6 @@ async def export_excel(user_id: str, token: str = ""):
         c2.fill = PatternFill(start_color="2d2d4e", end_color="2d2d4e", fill_type="solid")
         last_row += 1
 
-    # TOTALE REALE (da DB, non somma dei formati)
     c1 = ws.cell(row=last_row, column=1, value="TOTALE VINILI")
     c2 = ws.cell(row=last_row, column=2, value=totale_reale)
     c1.font = Font(bold=True, color="FFFFFF", size=12)
@@ -497,7 +593,6 @@ async def export_excel(user_id: str, token: str = ""):
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
-
     return Response(
         content=output.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -505,7 +600,6 @@ async def export_excel(user_id: str, token: str = ""):
             "Content-Disposition": "attachment; filename=Catalogo_Vinili.xlsx",
             "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Pragma": "no-cache"
         }
     )
 
