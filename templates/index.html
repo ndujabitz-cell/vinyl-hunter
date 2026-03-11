@@ -1,593 +1,609 @@
-<!DOCTYPE html>
-<html lang="it">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="theme-color" content="#1a1a2e">
-<title>🎵 Vinyl Hunter</title>
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; color: #eee; min-height: 100vh; overflow-x: hidden; }
+import os
+import io
+import json
+import base64
+import httpx
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from pydantic import BaseModel
+from typing import Optional
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+from collections import Counter
 
-/* ── HEADER ── */
-.header { background: linear-gradient(135deg, #0f3460, #533483); padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 12px rgba(0,0,0,0.4); }
-.header h1 { font-size: 22px; font-weight: 800; letter-spacing: 0.5px; }
-.header-right { display: flex; align-items: center; gap: 10px; }
-.badge { background: #e94560; color: white; font-size: 11px; padding: 3px 10px; border-radius: 12px; font-weight: 600; }
-.btn-logout { background: none; border: 1px solid rgba(255,255,255,0.3); color: #eee; font-size: 12px; padding: 5px 10px; border-radius: 8px; cursor: pointer; }
+app = FastAPI()
 
-/* ── SCREENS ── */
-.screen { display: none; min-height: calc(100vh - 60px); padding-bottom: 80px; }
-.screen.active { display: block; }
+SUPABASE_URL    = os.getenv("SUPABASE_URL")
+SUPABASE_ANON   = os.getenv("SUPABASE_ANON")
+SUPABASE_SECRET = os.getenv("SUPABASE_SECRET")
+GEMINI_KEY      = os.getenv("GEMINI_KEY")
+DISCOGS_TOKEN   = os.getenv("DISCOGS_TOKEN")
 
-/* ── AUTH ── */
-.auth-wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 30px 24px; }
-.auth-logo { width: 180px; height: 180px; margin-bottom: 16px; animation: spin 8s linear infinite; filter: drop-shadow(0 8px 24px rgba(0,0,0,0.6)); }
-@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-.auth-title { font-size: 32px; font-weight: 800; margin-bottom: 4px; letter-spacing: 0.5px; }
-.auth-sub { color: #aaa; font-size: 14px; margin-bottom: 32px; }
-.auth-card { background: #0f3460; border-radius: 20px; padding: 28px 24px; width: 100%; max-width: 400px; }
-.auth-tabs { display: flex; gap: 8px; margin-bottom: 24px; }
-.auth-tab { flex: 1; padding: 10px; border-radius: 10px; border: none; font-size: 14px; font-weight: 600; cursor: pointer; background: #16213e; color: #aaa; transition: all 0.2s; }
-.auth-tab.active { background: linear-gradient(135deg, #533483, #e94560); color: white; }
-.input-group { margin-bottom: 16px; }
-.input-group label { font-size: 12px; color: #aaa; display: block; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; }
-.input-group input { width: 100%; background: #16213e; border: 1px solid #533483; border-radius: 10px; padding: 12px 14px; color: #eee; font-size: 15px; outline: none; transition: border-color 0.2s; }
-.input-group input:focus { border-color: #e94560; }
-.btn-main { width: 100%; padding: 14px; border-radius: 12px; border: none; background: linear-gradient(135deg, #533483, #e94560); color: white; font-size: 16px; font-weight: 700; cursor: pointer; margin-top: 8px; transition: opacity 0.2s, transform 0.1s; }
-.btn-main:active { transform: scale(0.98); opacity: 0.9; }
-.btn-main:disabled { opacity: 0.5; cursor: not-allowed; }
-
-/* ── HOME ── */
-.home-wrap { padding: 24px 20px; }
-.welcome-card { background: linear-gradient(135deg, #0f3460, #533483); border-radius: 20px; padding: 24px; margin-bottom: 24px; display: flex; align-items: center; gap: 16px; }
-.welcome-avatar { font-size: 40px; }
-.welcome-text h2 { font-size: 20px; font-weight: 700; }
-.welcome-text p { color: #ccc; font-size: 13px; margin-top: 2px; }
-.stats-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 24px; }
-.stat-card { background: #0f3460; border-radius: 14px; padding: 16px 12px; text-align: center; }
-.stat-val { font-size: 26px; font-weight: 800; color: #e94560; }
-.stat-lab { font-size: 11px; color: #aaa; margin-top: 3px; }
-.section-label { font-size: 12px; color: #aaa; text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 12px; }
-.btn-action { display: flex; align-items: center; gap: 14px; width: 100%; padding: 16px; border-radius: 14px; border: none; font-size: 15px; font-weight: 600; cursor: pointer; margin-bottom: 10px; transition: transform 0.1s, opacity 0.2s; text-align: left; color: white; }
-.btn-action:active { transform: scale(0.98); opacity: 0.9; }
-.btn-action .icon { font-size: 24px; width: 36px; text-align: center; }
-.btn-action .txt small { display: block; font-size: 12px; font-weight: 400; opacity: 0.8; margin-top: 2px; }
-.bg-purple { background: linear-gradient(135deg, #533483, #e94560); }
-.bg-blue { background: #0f3460; border: 1px solid #533483; }
-.bg-green { background: linear-gradient(135deg, #0f9b58, #00d4aa); }
-
-/* ── SCAN ── */
-.scan-wrap { padding: 20px; }
-.camera-box { background: #000; border-radius: 18px; height: 260px; display: flex; flex-direction: column; align-items: center; justify-content: center; border: 2px dashed #533483; margin-bottom: 20px; overflow: hidden; position: relative; cursor: pointer; }
-.camera-box img { width: 100%; height: 100%; object-fit: cover; border-radius: 16px; }
-.camera-placeholder { text-align: center; color: #aaa; pointer-events: none; }
-.camera-placeholder span { font-size: 52px; display: block; margin-bottom: 10px; }
-.camera-placeholder p { font-size: 14px; }
-.scan-btn { background: linear-gradient(135deg, #e94560, #533483); color: white; border: none; border-radius: 50%; width: 72px; height: 72px; font-size: 30px; cursor: pointer; display: block; margin: 0 auto 20px; box-shadow: 0 4px 20px rgba(233,69,96,0.5); transition: transform 0.15s; }
-.scan-btn:active { transform: scale(0.92); }
-
-/* ── LOADING ── */
-.loading { text-align: center; padding: 24px; color: #aaa; font-size: 14px; }
-.spinner { width: 38px; height: 38px; border: 3px solid #533483; border-top-color: #e94560; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 12px; }
-
-/* ── RESULT CARD ── */
-.result-card { background: #0f3460; border-radius: 18px; padding: 20px; margin-bottom: 16px; }
-.result-card h3 { font-size: 13px; color: #aaa; margin-bottom: 16px; display: flex; align-items: center; gap: 6px; }
-.field { margin-bottom: 12px; }
-.field label { font-size: 11px; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px; display: block; margin-bottom: 5px; }
-.field input { width: 100%; background: #16213e; border: 1px solid #533483; border-radius: 8px; padding: 10px 12px; color: #eee; font-size: 14px; outline: none; }
-.field input:focus { border-color: #e94560; }
-.row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.action-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 16px; }
-.btn-confirm { background: #0f9b58; color: white; border: none; border-radius: 10px; padding: 13px; font-size: 14px; font-weight: 600; cursor: pointer; transition: opacity 0.2s; }
-.btn-confirm:active { opacity: 0.8; }
-.btn-discard { background: #2a2a3e; color: #aaa; border: none; border-radius: 10px; padding: 13px; font-size: 14px; cursor: pointer; }
-
-/* ── LIST ── */
-.list-wrap { padding: 20px; }
-.search-bar { background: #0f3460; border: 1px solid #533483; border-radius: 12px; padding: 12px 16px; color: #eee; width: 100%; font-size: 14px; margin-bottom: 16px; outline: none; }
-.search-bar:focus { border-color: #e94560; }
-.vinyl-item { background: #0f3460; border-radius: 12px; padding: 14px; margin-bottom: 10px; display: flex; gap: 12px; align-items: center; border-left: 3px solid #533483; position: relative; }
-.vinyl-disc { font-size: 28px; flex-shrink: 0; }
-.vinyl-info { flex: 1; min-width: 0; }
-.vinyl-info h4 { font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.vinyl-info p { font-size: 12px; color: #aaa; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.vinyl-tag { background: #533483; color: white; font-size: 10px; padding: 3px 8px; border-radius: 8px; flex-shrink: 0; }
-.btn-delete { background: none; border: none; color: #e94560; font-size: 18px; cursor: pointer; padding: 4px 8px; flex-shrink: 0; }
-.empty-state { text-align: center; padding: 60px 20px; color: #aaa; }
-.empty-state span { font-size: 52px; display: block; margin-bottom: 12px; }
-
-/* ── BOTTOM NAV ── */
-.bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #0f3460; border-top: 1px solid #533483; display: flex; justify-content: space-around; padding: 10px 0 16px; z-index: 100; }
-.nav-btn { background: none; border: none; color: #aaa; font-size: 10px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 0 20px; transition: color 0.2s; }
-.nav-btn.active { color: #e94560; }
-.nav-btn span { font-size: 22px; }
-
-/* ── MODAL ── */
-.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 200; display: flex; align-items: center; justify-content: center; padding: 24px; }
-.modal-box { background: #0f3460; border-radius: 20px; padding: 28px 24px; width: 100%; max-width: 360px; text-align: center; border: 1px solid #e94560; }
-.modal-box h3 { font-size: 18px; font-weight: 700; margin-bottom: 10px; color: #e94560; }
-.modal-box p { font-size: 14px; color: #ccc; margin-bottom: 24px; }
-.modal-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.btn-danger { background: #e94560; color: white; border: none; border-radius: 10px; padding: 13px; font-size: 14px; font-weight: 700; cursor: pointer; }
-.btn-cancel { background: #2a2a3e; color: #aaa; border: none; border-radius: 10px; padding: 13px; font-size: 14px; cursor: pointer; }
-
-.toast { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%); background: #0f9b58; color: white; padding: 10px 22px; border-radius: 20px; font-size: 13px; font-weight: 600; z-index: 999; opacity: 0; transition: opacity 0.3s; white-space: nowrap; pointer-events: none; }
-.toast.show { opacity: 1; }
-.toast.error { background: #e94560; }
-</style>
-</head>
-<body>
-
-<!-- HEADER -->
-<div class="header" id="header" style="display:none">
-  <h1>🎵 Vinyl Hunter</h1>
-  <div class="header-right">
-    <span class="badge" id="badge-count">0 dischi</span>
-    <button class="btn-logout" onclick="logout()">Esci</button>
-  </div>
-</div>
-
-<!-- AUTH SCREEN -->
-<div class="screen active" id="screen-auth">
-  <div class="auth-wrap">
-    <svg class="auth-logo" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="100" cy="100" r="98" fill="#111"/>
-      <circle cx="100" cy="100" r="90" fill="none" stroke="#1a1a1a" stroke-width="1.5"/>
-      <circle cx="100" cy="100" r="84" fill="none" stroke="#1a1a1a" stroke-width="1.5"/>
-      <circle cx="100" cy="100" r="78" fill="none" stroke="#1a1a1a" stroke-width="1.5"/>
-      <circle cx="100" cy="100" r="72" fill="none" stroke="#1a1a1a" stroke-width="1.5"/>
-      <circle cx="100" cy="100" r="66" fill="none" stroke="#1a1a1a" stroke-width="1.5"/>
-      <circle cx="100" cy="100" r="55" fill="#2a7a3a"/>
-      <circle cx="100" cy="100" r="54" fill="none" stroke="#1e5c2a" stroke-width="1"/>
-      <circle cx="100" cy="100" r="45" fill="none" stroke="#1e5c2a" stroke-width="0.8" stroke-dasharray="4,3"/>
-      <ellipse cx="82" cy="72" rx="14" ry="8" fill="rgba(255,255,255,0.08)" transform="rotate(-30 82 72)"/>
-      <path id="arcTop" d="M 55,100 A 45,45 0 0,1 145,100" fill="none"/>
-      <text font-size="8.5" font-family="Arial, sans-serif" font-weight="bold" fill="white" letter-spacing="2">
-        <textPath href="#arcTop" startOffset="8%">THE VINYL HUNTER</textPath>
-      </text>
-      <path id="arcBot" d="M 58,108 A 45,45 0 0,0 142,108" fill="none"/>
-      <text font-size="6" font-family="Arial, sans-serif" fill="#c8e6c8" letter-spacing="1.5">
-        <textPath href="#arcBot" startOffset="12%">CATALOGO VINILI</textPath>
-      </text>
-      <text x="100" y="97" text-anchor="middle" font-size="11" font-family="Arial" font-weight="bold" fill="white">45</text>
-      <text x="100" y="108" text-anchor="middle" font-size="6" font-family="Arial" fill="#c8e6c8" letter-spacing="2">RPM</text>
-      <circle cx="100" cy="100" r="7" fill="#111"/>
-      <circle cx="100" cy="100" r="3" fill="#222"/>
-      <circle cx="100" cy="100" r="97" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="2"/>
-    </svg>
-    <div class="auth-title">Vinyl Hunter</div>
-    <div class="auth-sub">Cataloga la tua collezione di vinili</div>
-    <div class="auth-card">
-      <div class="auth-tabs">
-        <button class="auth-tab active" onclick="switchTab('login')">Accedi</button>
-        <button class="auth-tab" onclick="switchTab('register')">Registrati</button>
-      </div>
-      <div id="form-login">
-        <div class="input-group"><label>Email</label><input type="email" id="login-email" placeholder="tua@email.com"></div>
-        <div class="input-group"><label>Password</label><input type="password" id="login-password" placeholder="••••••••"></div>
-        <button class="btn-main" onclick="doLogin()" id="btn-login">Accedi</button>
-      </div>
-      <div id="form-register" style="display:none">
-        <div class="input-group"><label>Nome</label><input type="text" id="reg-nome" placeholder="Il tuo nome"></div>
-        <div class="input-group"><label>Email</label><input type="email" id="reg-email" placeholder="tua@email.com"></div>
-        <div class="input-group"><label>Password</label><input type="password" id="reg-password" placeholder="Min. 6 caratteri"></div>
-        <button class="btn-main" onclick="doRegister()" id="btn-register">Crea account</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- HOME SCREEN -->
-<div class="screen" id="screen-home">
-  <div class="home-wrap">
-    <div class="welcome-card">
-      <div class="welcome-avatar">🎧</div>
-      <div class="welcome-text">
-        <h2>Ciao, <span id="user-nome">Collezionista</span>!</h2>
-        <p>La tua collezione ti aspetta</p>
-      </div>
-    </div>
-    <div class="stats-row">
-      <div class="stat-card"><div class="stat-val" id="stat-total">0</div><div class="stat-lab">Totale</div></div>
-      <div class="stat-card"><div class="stat-val" style="color:#00d4aa" id="stat-lp">0</div><div class="stat-lab">LP</div></div>
-      <div class="stat-card"><div class="stat-val" style="color:#533483" id="stat-7">0</div><div class="stat-lab">Singoli</div></div>
-    </div>
-    <p class="section-label">Aggiungi dischi</p>
-    <button class="btn-action bg-purple" onclick="goTo('screen-scan'); setNav('nav-scan')">
-      <span class="icon">📷</span>
-      <span class="txt">Scansiona etichetta<small>Fotografa e aggiungi un disco</small></span>
-    </button>
-    <p class="section-label" style="margin-top:20px">File Excel</p>
-    <button class="btn-action bg-blue" onclick="document.getElementById('import-excel-input').click()">
-      <span class="icon">📂</span>
-      <span class="txt">Carica Excel esistente<small>Importa un catalogo precedente</small></span>
-    </button>
-    <input type="file" accept=".xlsx,.xls" id="import-excel-input" style="position:fixed;top:-9999px;left:-9999px;opacity:0;width:1px;height:1px" onchange="importExcel(event)">
-    <button class="btn-action bg-green" onclick="exportExcel()">
-      <span class="icon">⬇️</span>
-      <span class="txt">Scarica catalogo<small>Salva il file .xlsx sul telefono</small></span>
-    </button>
-    <button class="btn-action" style="background:linear-gradient(135deg,#7b0000,#e94560)" onclick="showDeleteCatalogModal()">
-      <span class="icon">🗑️</span>
-      <span class="txt">Elimina catalogo<small>Cancella tutti i tuoi dischi</small></span>
-    </button>
-  </div>
-</div>
-
-<!-- MODAL ELIMINA CATALOGO -->
-<div class="modal-overlay" id="modal-delete-catalog" style="display:none">
-  <div class="modal-box">
-    <h3>⚠️ Attenzione!</h3>
-    <p>Davvero vuoi eliminare l'intero catalogo?<br>Questa operazione non può essere annullata.</p>
-    <div class="modal-btns">
-      <button class="btn-cancel" onclick="hideDeleteCatalogModal()">No, annulla</button>
-      <button class="btn-danger" onclick="deleteCatalog()">Sì, elimina tutto</button>
-    </div>
-  </div>
-</div>
-
-<!-- SCAN SCREEN -->
-<div class="screen" id="screen-scan">
-  <div class="scan-wrap">
-    <p class="section-label">Scansiona etichetta</p>
-    <div class="camera-box" id="camera-box" onclick="document.getElementById('file-input').click()">
-      <img id="preview-img" src="" alt="" style="display:none">
-      <div class="camera-placeholder" id="camera-placeholder">
-        <span>📷</span>
-        <p>Tocca per fotografare<br>l'etichetta del disco</p>
-      </div>
-    </div>
-    <input type="file" accept="image/*" capture="environment" id="file-input" style="display:none" onchange="handlePhoto(event)">
-    <button class="scan-btn" onclick="document.getElementById('file-input').click()">📷</button>
-    <div class="loading" id="loading" style="display:none">
-      <div class="spinner"></div>
-      <p>Analisi etichetta in corso…</p>
-    </div>
-    <div id="result-card" style="display:none">
-      <div class="result-card">
-        <h3>✅ Dati rilevati — controlla e modifica</h3>
-        <div class="field"><label>Artista</label><input id="f-artista"></div>
-        <div class="field"><label>Titolo</label><input id="f-titolo"></div>
-        <div class="row2">
-          <div class="field"><label>Formato</label><input id="f-formato"></div>
-          <div class="field"><label>Anno</label><input id="f-anno"></div>
-        </div>
-        <div class="row2">
-          <div class="field"><label>Etichetta</label><input id="f-etichetta"></div>
-          <div class="field"><label>Cat. No.</label><input id="f-catno"></div>
-        </div>
-        <div class="field"><label>Stile / Genere</label><input id="f-stile"></div>
-        <div class="action-btns">
-          <button class="btn-confirm" onclick="confirmVinyl()">✅ Aggiungi</button>
-          <button class="btn-discard" onclick="discardResult()">❌ Scarta</button>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- LIST SCREEN -->
-<div class="screen" id="screen-list">
-  <div class="list-wrap">
-    <p class="section-label">Il tuo catalogo</p>
-    <input class="search-bar" placeholder="🔍 Cerca artista, titolo…" type="text" oninput="filterList(this.value)">
-    <div id="vinyl-list"></div>
-  </div>
-</div>
-
-<!-- BOTTOM NAV -->
-<div class="bottom-nav" id="bottom-nav" style="display:none">
-  <button class="nav-btn active" id="nav-home" onclick="goTo('screen-home'); setNav('nav-home')">
-    <span>🏠</span> Home
-  </button>
-  <button class="nav-btn" id="nav-scan" onclick="goTo('screen-scan'); setNav('nav-scan')">
-    <span>📷</span> Scansiona
-  </button>
-  <button class="nav-btn" id="nav-list" onclick="goTo('screen-list'); setNav('nav-list'); loadVinyls()">
-    <span>📋</span> Catalogo
-  </button>
-</div>
-
-<div class="toast" id="toast"></div>
-
-<script>
-let STATE = { token: null, userId: null, nome: null, vinyls: [] };
-
-window.onload = () => {
-  const saved = localStorage.getItem('vh_session');
-  if (saved) {
-    try {
-      STATE = { ...STATE, ...JSON.parse(saved) };
-      showApp();
-      loadVinyls();
-    } catch(e) { localStorage.removeItem('vh_session'); }
-  }
-};
-
-function switchTab(tab) {
-  document.querySelectorAll('.auth-tab').forEach((t,i) => t.classList.toggle('active', (tab==='login'&&i===0)||(tab==='register'&&i===1)));
-  document.getElementById('form-login').style.display = tab === 'login' ? 'block' : 'none';
-  document.getElementById('form-register').style.display = tab === 'register' ? 'block' : 'none';
+DISCOGS_HEADERS = lambda: {
+    "Authorization": f"Discogs token={DISCOGS_TOKEN}",
+    "User-Agent": "VinylHunter/1.0"
 }
 
-async function doLogin() {
-  const email = document.getElementById('login-email').value.trim();
-  const password = document.getElementById('login-password').value;
-  if (!email || !password) return showToast('Compila tutti i campi', true);
-  const btn = document.getElementById('btn-login');
-  btn.disabled = true; btn.textContent = 'Accesso…';
-  try {
-    const r = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, password}) });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || 'Errore login');
-    STATE.token = data.access_token;
-    STATE.userId = data.user_id;
-    STATE.nome = data.nome;
-    localStorage.setItem('vh_session', JSON.stringify({token: STATE.token, userId: STATE.userId, nome: STATE.nome}));
-    showApp();
-    loadVinyls();
-  } catch(e) { showToast(e.message, true); }
-  btn.disabled = false; btn.textContent = 'Accedi';
-}
+class RegisterData(BaseModel):
+    email: str
+    password: str
+    nome: str
 
-async function doRegister() {
-  const nome = document.getElementById('reg-nome').value.trim();
-  const email = document.getElementById('reg-email').value.trim();
-  const password = document.getElementById('reg-password').value;
-  if (!nome || !email || !password) return showToast('Compila tutti i campi', true);
-  if (password.length < 6) return showToast('Password min. 6 caratteri', true);
-  const btn = document.getElementById('btn-register');
-  btn.disabled = true; btn.textContent = 'Registrazione…';
-  try {
-    const r = await fetch('/api/register', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email, password, nome}) });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || 'Errore registrazione');
-    showToast('✅ Controlla la tua email per confermare!');
-    switchTab('login');
-  } catch(e) { showToast(e.message, true); }
-  btn.disabled = false; btn.textContent = 'Crea account';
-}
+class LoginData(BaseModel):
+    email: str
+    password: str
 
-function logout() {
-  localStorage.removeItem('vh_session');
-  STATE = { token: null, userId: null, nome: null, vinyls: [] };
-  document.getElementById('header').style.display = 'none';
-  document.getElementById('bottom-nav').style.display = 'none';
-  goTo('screen-auth');
-}
+class VinylData(BaseModel):
+    user_id: str
+    access_token: str
+    artista: str
+    titolo: Optional[str] = ""
+    formato: Optional[str] = ""
+    stile: Optional[str] = ""
+    anno: Optional[str] = ""
+    etichetta: Optional[str] = ""
+    stampa: Optional[str] = ""
+    stampa_costosa: Optional[str] = ""
+    prezzo_max: Optional[str] = ""
 
-function showApp() {
-  document.getElementById('header').style.display = 'flex';
-  document.getElementById('bottom-nav').style.display = 'flex';
-  document.getElementById('user-nome').textContent = STATE.nome || 'Collezionista';
-  goTo('screen-home');
-  setNav('nav-home');
-}
+def supa_headers(token: str = None, use_secret: bool = False):
+    key = SUPABASE_SECRET if use_secret else SUPABASE_ANON
+    h = {"apikey": key, "Content-Type": "application/json"}
+    h["Authorization"] = f"Bearer {token}" if token else f"Bearer {key}"
+    return h
 
-function goTo(id) {
-  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  document.getElementById(id).classList.add('active');
-}
-function setNav(id) {
-  document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById(id).classList.add('active');
-}
+# ── Cache Discogs su Supabase ─────────────────────────────────────────────────
 
-async function handlePhoto(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const reader = new FileReader();
-  reader.onload = e => {
-    const img = document.getElementById('preview-img');
-    img.src = e.target.result;
-    img.style.display = 'block';
-    document.getElementById('camera-placeholder').style.display = 'none';
-  };
-  reader.readAsDataURL(file);
-  document.getElementById('loading').style.display = 'block';
-  document.getElementById('result-card').style.display = 'none';
-  const form = new FormData();
-  form.append('file', file);
-  try {
-    const r = await fetch('/api/scan', { method:'POST', body: form });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || 'Errore OCR');
-    document.getElementById('f-artista').value = data.artista || '';
-    document.getElementById('f-titolo').value = data.titolo || '';
-    document.getElementById('f-formato').value = data.formato || '';
-    document.getElementById('f-anno').value = data.anno || '';
-    document.getElementById('f-etichetta').value = data.etichetta || '';
-    document.getElementById('f-catno').value = data.catno || '';
-    document.getElementById('f-stile').value = data.stile || '';
-    document.getElementById('result-card').style.display = 'block';
-  } catch(e) { showToast(e.message, true); }
-  document.getElementById('loading').style.display = 'none';
-  event.target.value = '';
-}
+def cache_key(artista: str, titolo: str) -> str:
+    """Chiave normalizzata per la cache: artista|titolo in minuscolo."""
+    a = (artista or "").strip().lower()
+    t = (titolo or "").strip().lower()
+    return f"{a}|{t}"
 
-async function confirmVinyl() {
-  const vinyl = {
-    user_id: STATE.userId,
-    access_token: STATE.token,
-    artista: document.getElementById('f-artista').value,
-    titolo: document.getElementById('f-titolo').value,
-    formato: document.getElementById('f-formato').value,
-    anno: document.getElementById('f-anno').value,
-    etichetta: document.getElementById('f-etichetta').value,
-    stampa: document.getElementById('f-catno').value,
-    stile: document.getElementById('f-stile').value,
-    stampa_costosa: '',
-    prezzo_max: '',
-  };
-  if (!vinyl.artista) return showToast('Inserisci almeno l\'artista', true);
-  try {
-    const r = await fetch('/api/vinile', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(vinyl) });
-    if (!r.ok) throw new Error('Errore salvataggio');
-    showToast('✅ Disco aggiunto!');
-    discardResult();
-    loadVinyls();
-  } catch(e) { showToast(e.message, true); }
-}
+async def cache_get(key: str) -> dict | None:
+    """Legge un record dalla cache Discogs su Supabase."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                f"{SUPABASE_URL}/rest/v1/discogs_cache",
+                headers={**supa_headers(use_secret=True), "Accept": "application/json"},
+                params={"cache_key": f"eq.{key}", "limit": "1"}
+            )
+            if r.status_code == 200:
+                rows = r.json()
+                if rows:
+                    print(f"CACHE HIT: {key}")
+                    return rows[0]
+    except Exception as e:
+        print(f"CACHE GET ERROR: {e}")
+    return None
 
-function discardResult() {
-  document.getElementById('result-card').style.display = 'none';
-  document.getElementById('preview-img').style.display = 'none';
-  document.getElementById('camera-placeholder').style.display = 'block';
-}
+async def cache_set(key: str, data: dict):
+    """Salva un record nella cache Discogs su Supabase (upsert)."""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            payload = {
+                "cache_key": key,
+                "artista": data.get("artista", ""),
+                "titolo": data.get("titolo", ""),
+                "etichetta": data.get("etichetta", ""),
+                "stile": data.get("stile", ""),
+                "anno": data.get("anno", ""),
+                "formato": data.get("formato", ""),
+                "stampa": data.get("stampa", ""),
+                "stampa_costosa": data.get("stampa_costosa", ""),
+                "prezzo_max": data.get("prezzo_max", ""),
+            }
+            await client.post(
+                f"{SUPABASE_URL}/rest/v1/discogs_cache",
+                headers={
+                    **supa_headers(use_secret=True),
+                    "Prefer": "resolution=merge-duplicates,return=minimal"
+                },
+                json=payload
+            )
+            print(f"CACHE SET: {key}")
+    except Exception as e:
+        print(f"CACHE SET ERROR: {e}")
 
-async function loadVinyls() {
-  try {
-    const r = await fetch(`/api/vinili/${STATE.userId}?token=${STATE.token}`);
-    STATE.vinyls = await r.json();
-    renderList(STATE.vinyls);
-    updateStats();
-  } catch(e) { console.error(e); }
-}
+# ── Discogs ───────────────────────────────────────────────────────────────────
 
-function renderList(vinyls) {
-  const el = document.getElementById('vinyl-list');
-  if (!vinyls.length) {
-    el.innerHTML = '<div class="empty-state"><span>📭</span><p>Nessun disco ancora.<br>Inizia a scansionare!</p></div>';
-    return;
-  }
-  el.innerHTML = vinyls.map(v => `
-    <div class="vinyl-item">
-      <div class="vinyl-disc">🖤</div>
-      <div class="vinyl-info">
-        <h4>${v.artista || '—'}</h4>
-        <p>${[v.titolo, v.anno, v.etichetta].filter(Boolean).join(' · ')}</p>
-      </div>
-      ${v.formato ? `<span class="vinyl-tag">${v.formato}</span>` : ''}
-      <button class="btn-delete" onclick="deleteVinyl(${v.id})">🗑</button>
-    </div>
-  `).join('');
-}
+async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
+    """Trova la versione con prezzo piu alto tra quelle in vendita."""
+    try:
+        async with httpx.AsyncClient(timeout=25) as client:
+            r = await client.get(
+                f"https://api.discogs.com/masters/{master_id}/versions",
+                headers=DISCOGS_HEADERS(),
+                params={"per_page": 100}
+            )
+            if r.status_code != 200:
+                return "", ""
 
-function filterList(q) {
-  const filtered = STATE.vinyls.filter(v =>
-    (v.artista||'').toLowerCase().includes(q.toLowerCase()) ||
-    (v.titolo||'').toLowerCase().includes(q.toLowerCase()) ||
-    (v.etichetta||'').toLowerCase().includes(q.toLowerCase())
-  );
-  renderList(filtered);
-}
+            versions = r.json().get("versions", [])
+            print(f"DISCOGS VERSIONS COUNT: {len(versions)} for master {master_id}")
 
-async function deleteVinyl(id) {
-  if (!confirm('Eliminare questo disco?')) return;
-  try {
-    const r = await fetch(`/api/vinile/${id}?token=${STATE.token}`, { method:'DELETE' });
-    if (!r.ok) throw new Error('Errore eliminazione');
-    showToast('🗑 Disco eliminato');
-    loadVinyls();
-  } catch(e) { showToast(e.message, true); }
-}
+            best_price = 0.0
+            best_catno = ""
 
-function updateStats() {
-  const total = STATE.vinyls.length;
-  const lp = STATE.vinyls.filter(v => (v.formato||'').toUpperCase().includes('LP')).length;
-  const singoli = STATE.vinyls.filter(v => (v.formato||'').includes('7')).length;
-  document.getElementById('stat-total').textContent = total;
-  document.getElementById('stat-lp').textContent = lp;
-  document.getElementById('stat-7').textContent = singoli;
-  document.getElementById('badge-count').textContent = `${total} dischi`;
-}
+            for v in versions:
+                release_id = v.get("id")
+                catno = v.get("catno", "")
+                if not release_id:
+                    continue
 
-async function importExcel(event) {
-  const file = event.target.files[0];
-  if (!file) return;
-  const form = new FormData();
-  form.append('file', file);
-  form.append('user_id', STATE.userId);
-  form.append('token', STATE.token);
-  showToast('⏳ Importazione in corso…');
-  try {
-    const r = await fetch(`/api/import_excel`, { method:'POST', body: form });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || 'Errore importazione');
-    showToast(`✅ Importati ${data.imported} dischi!`);
-    loadVinyls();
-  } catch(e) { showToast(e.message, true); }
-  event.target.value = '';
-}
+                stats_r = await client.get(
+                    f"https://api.discogs.com/marketplace/stats/{release_id}",
+                    headers=DISCOGS_HEADERS()
+                )
+                if stats_r.status_code != 200:
+                    continue
 
-async function exportExcel() {
-  if (!STATE.userId || !STATE.token) return showToast('Devi essere loggato', true);
-  showToast('\u23f3 Preparazione file\u2026');
-  try {
-    const url = `/api/export_excel/${STATE.userId}?token=${encodeURIComponent(STATE.token)}`;
-    const r = await fetch(url, { method: 'GET', cache: 'no-store' });
-    if (!r.ok) {
-      const errText = await r.text().catch(() => r.status);
-      throw new Error('Errore server: ' + errText);
+                stats = stats_r.json()
+                num_for_sale = int(stats.get("num_for_sale") or 0)
+                if num_for_sale == 0:
+                    continue
+
+                lp = stats.get("lowest_price")
+                if lp is None:
+                    continue
+                price = float(lp.get("value", 0) if isinstance(lp, dict) else lp or 0)
+
+                if price > best_price:
+                    best_price = price
+                    best_catno = catno if catno else f"ID:{release_id}"
+
+            if best_price > 0:
+                return best_catno, f"EUR {best_price:.2f}"
+            return "", ""
+
+    except Exception as e:
+        print(f"DISCOGS PRICE ERROR: {e}")
+        return "", ""
+
+async def cerca_su_discogs(data: dict, use_cache: bool = True) -> dict:
+    """
+    Arricchisce i dati con Discogs.
+    Se use_cache=True controlla prima la cache Supabase.
+    Artista e titolo non vengono mai sovrascritti.
+    """
+    if not DISCOGS_TOKEN:
+        return data
+
+    artista_orig = data.get("artista", "")
+    titolo_orig  = data.get("titolo", "")
+    ck = cache_key(artista_orig, titolo_orig)
+
+    # Controlla cache
+    if use_cache and artista_orig:
+        cached = await cache_get(ck)
+        if cached:
+            # Mantieni artista e titolo originali, usa il resto dalla cache
+            return {
+                "artista":        artista_orig,
+                "titolo":         titolo_orig,
+                "formato":        data.get("formato") or cached.get("formato", ""),
+                "stile":          data.get("stile") or cached.get("stile", ""),
+                "anno":           data.get("anno") or cached.get("anno", ""),
+                "etichetta":      data.get("etichetta") or cached.get("etichetta", ""),
+                "stampa":         data.get("stampa") or cached.get("stampa", ""),
+                "stampa_costosa": cached.get("stampa_costosa", ""),
+                "prezzo_max":     cached.get("prezzo_max", ""),
+            }
+
+    query_parts = []
+    if data.get("stampa"):   query_parts.append(data["stampa"])
+    if data.get("artista"):  query_parts.append(data["artista"])
+    if data.get("titolo"):   query_parts.append(data["titolo"])
+    if data.get("etichetta"): query_parts.append(data["etichetta"])
+
+    if not query_parts:
+        return data
+
+    query = " ".join(query_parts)
+    print(f"DISCOGS QUERY: {query}")
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            params = {"q": query, "type": "release", "per_page": 3}
+            if data.get("stampa"):
+                params["catno"] = data["stampa"]
+
+            r = await client.get(
+                "https://api.discogs.com/database/search",
+                headers=DISCOGS_HEADERS(),
+                params=params
+            )
+            if r.status_code != 200:
+                return data
+
+            results = r.json().get("results", [])
+            if not results:
+                return data
+
+            match = results[0]
+            print(f"DISCOGS MATCH: {match.get('title')} {match.get('year')}")
+
+            # Estrai campi da Discogs
+            title_full = match.get("title", "")
+            disc_artista = artista_orig
+            disc_titolo  = titolo_orig
+            if " - " in title_full:
+                parts = title_full.split(" - ", 1)
+                disc_artista = parts[0].strip()
+                disc_titolo  = parts[1].strip()
+
+            styles   = match.get("style", []) or match.get("genre", [])
+            stile    = ", ".join(styles[:2]) if styles else data.get("stile", "")
+            formats  = match.get("format", [])
+            formato  = formats[0] if formats else data.get("formato", "")
+            labels   = match.get("label", [])
+            etichetta = labels[0] if labels else data.get("etichetta", "")
+            anno     = str(match.get("year", "")) or data.get("anno", "")
+            stampa   = data.get("stampa", "") or match.get("catno", "")
+
+            stampa_costosa = ""
+            prezzo_max     = ""
+            master_id = match.get("master_id")
+            if master_id:
+                stampa_costosa, prezzo_max = await cerca_prezzo_max_discogs(master_id)
+
+            result = {
+                "artista":        artista_orig,   # mai sovrascritto
+                "titolo":         titolo_orig,    # mai sovrascritto
+                "formato":        data.get("formato") or formato,
+                "stile":          data.get("stile") or stile,
+                "anno":           data.get("anno") or anno,
+                "etichetta":      data.get("etichetta") or etichetta,
+                "stampa":         stampa,
+                "stampa_costosa": stampa_costosa,
+                "prezzo_max":     prezzo_max,
+            }
+
+            # Salva in cache per uso futuro
+            await cache_set(ck, {**result,
+                "artista": disc_artista, "titolo": disc_titolo})
+
+            print(f"DISCOGS ENRICHED: {result}")
+            return result
+
+    except Exception as e:
+        print(f"DISCOGS EXCEPTION: {e}")
+        return data
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
+
+@app.post("/api/register")
+async def register(data: RegisterData):
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{SUPABASE_URL}/auth/v1/signup",
+            headers=supa_headers(),
+            json={"email": data.email, "password": data.password, "data": {"nome": data.nome}}
+        )
+    res = r.json()
+    if r.status_code not in (200, 201) or "error" in res:
+        raise HTTPException(400, res.get("msg") or res.get("error_description") or res.get("message") or str(res))
+    return {"status": "ok", "message": "Registrazione completata"}
+
+@app.post("/api/login")
+async def login(data: LoginData):
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{SUPABASE_URL}/auth/v1/token?grant_type=password",
+            headers=supa_headers(),
+            json={"email": data.email, "password": data.password}
+        )
+    res = r.json()
+    if r.status_code != 200 or "access_token" not in res:
+        raise HTTPException(401, "Email o password errati")
+    return {
+        "access_token": res["access_token"],
+        "user_id": res["user"]["id"],
+        "nome": res["user"].get("user_metadata", {}).get("nome", data.email)
     }
 
-    // Leggi come ArrayBuffer e forza il MIME xlsx
-    const arrayBuffer = await r.arrayBuffer();
-    if (!arrayBuffer || arrayBuffer.byteLength < 100) {
-      throw new Error('File ricevuto vuoto o corrotto');
+# ── Scan ──────────────────────────────────────────────────────────────────────
+
+@app.post("/api/scan")
+async def scan_label(file: UploadFile = File(...)):
+    content = await file.read()
+    gemini_data = {
+        "artista": "", "titolo": "", "formato": "", "stile": "",
+        "anno": "", "etichetta": "", "stampa": "",
+        "stampa_costosa": "", "prezzo_max": ""
     }
 
-    const blob = new Blob([arrayBuffer], {
-      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    });
-    const blobUrl = URL.createObjectURL(blob);
-    const filename = 'Catalogo_Vinili.xlsx';
+    if GEMINI_KEY:
+        try:
+            b64 = base64.b64encode(content).decode()
+            mime = file.content_type or "image/jpeg"
+            gemini_url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"gemini-2.5-flash:generateContent?key={GEMINI_KEY}"
+            )
+            prompt = """Analizza questa immagine di un'etichetta di disco vinile.
+Estrai le informazioni visibili e rispondi SOLO con JSON valido senza markdown:
+{"artista":"","titolo":"","formato":"","stile":"","anno":"","etichetta":"","stampa":""}
 
-    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+REGOLE FONDAMENTALI:
+- "stampa" = numero di catalogo (catalog number). Esempi validi: CBS 1234, HS-032, ATL-50234, 2C 006-93752, CLMN-126.
+  Il catalog number e' stampato vicino al logo dell'etichetta, sul bordo, o inciso nella plastica.
+  NON e' il codice a barre EAN/barcode (sequenza numerica lunga tipo 3700426913386).
+  NON e' il numero ISRC. Se non trovi un catalog number chiaro, lascia "stampa" vuoto.
+- "artista" = nome dell'artista o band principale
+- "titolo" = titolo del brano/album. Se ci sono Side A / Side B usa il titolo del Side A
+- "formato" = 7", 10", 12", LP, EP, 45rpm, 33rpm
+- "stile" = genere musicale. Se non visibile deducilo dall'etichetta (Blue Note=Jazz, Motown=Soul)
+- "anno" = anno a 4 cifre. NON confondere con numeri di catalogo
+- "etichetta" = nome etichetta discografica
+- Lascia vuoto qualsiasi campo non chiaramente visibile. NON inventare."""
+            payload = {"contents": [{"parts": [
+                {"text": prompt},
+                {"inline_data": {"mime_type": mime, "data": b64}}
+            ]}]}
+            async with httpx.AsyncClient(timeout=30) as client:
+                r = await client.post(gemini_url, json=payload)
+            if r.status_code == 200:
+                text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                text = text.strip().replace("```json", "").replace("```", "").strip()
+                try:
+                    parsed = json.loads(text)
+                    stampa_val = str(parsed.get("stampa", "")).strip()
+                    if stampa_val.isdigit() and len(stampa_val) >= 10:
+                        parsed["stampa"] = ""
+                    gemini_data.update(parsed)
+                except Exception as pe:
+                    print(f"JSON PARSE ERROR: {pe}")
+        except Exception as e:
+            print(f"GEMINI EXCEPTION: {e}")
 
-    if (isIOS) {
-      window.open(blobUrl, '_blank');
-    } else {
-      // Funziona su Android Chrome, PC Chrome, Firefox, Edge
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = filename;
-      a.style.position = 'fixed';
-      a.style.top = '-100px';
-      document.body.appendChild(a);
-      a.click();
-      setTimeout(() => {
-        document.body.removeChild(a);
-        URL.revokeObjectURL(blobUrl);
-      }, 3000);
+    result = await cerca_su_discogs(gemini_data, use_cache=True)
+    result["catno"] = result.get("stampa", "")
+    return result
+
+# ── Vinili CRUD ───────────────────────────────────────────────────────────────
+
+@app.post("/api/vinile")
+async def add_vinyl(v: VinylData):
+    async with httpx.AsyncClient() as client:
+        r = await client.post(
+            f"{SUPABASE_URL}/rest/v1/vinili",
+            headers=supa_headers(v.access_token),
+            json={
+                "user_id": v.user_id, "artista": v.artista, "titolo": v.titolo,
+                "formato": v.formato, "stile": v.stile, "anno": v.anno,
+                "etichetta": v.etichetta, "stampa": v.stampa,
+                "stampa_costosa": v.stampa_costosa, "prezzo_max": v.prezzo_max
+            }
+        )
+    if r.status_code not in (200, 201):
+        raise HTTPException(400, f"Errore salvataggio: {r.status_code} - {r.text[:100]}")
+    return {"status": "ok"}
+
+@app.get("/api/vinili/{user_id}")
+async def get_vinyls(user_id: str, token: str):
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/vinili?user_id=eq.{user_id}&order=created_at.desc",
+            headers=supa_headers(token)
+        )
+    if r.status_code != 200:
+        raise HTTPException(400, "Errore recupero dati")
+    return r.json()
+
+@app.delete("/api/vinile/{vinyl_id}")
+async def delete_vinyl(vinyl_id: int, token: str):
+    async with httpx.AsyncClient() as client:
+        r = await client.delete(
+            f"{SUPABASE_URL}/rest/v1/vinili?id=eq.{vinyl_id}",
+            headers=supa_headers(token)
+        )
+    if r.status_code not in (200, 204):
+        raise HTTPException(400, "Errore eliminazione")
+    return {"status": "deleted"}
+
+@app.delete("/api/catalogo/{user_id}")
+async def delete_catalog(user_id: str, token: str):
+    async with httpx.AsyncClient() as client:
+        r = await client.delete(
+            f"{SUPABASE_URL}/rest/v1/vinili?user_id=eq.{user_id}",
+            headers=supa_headers(token)
+        )
+    if r.status_code not in (200, 204):
+        raise HTTPException(400, "Errore eliminazione catalogo")
+    return {"status": "deleted"}
+
+# ── Import Excel con SSE progress + arricchimento + cache ─────────────────────
+
+@app.post("/api/import_excel")
+async def import_excel(
+    user_id: str = Form(...),
+    token: str = Form(...),
+    file: UploadFile = File(...)
+):
+    content_bytes = await file.read()
+    wb = load_workbook(io.BytesIO(content_bytes))
+    ws = wb.active
+    SKIP = {
+        '7"', '10"', '12"', '4"', 'lp', '2xlp', '2x lp', 'ep',
+        'single', 'riepilogo formati', 'totale vinili', 'artista'
     }
-    showToast('\ud83d\udce5 Download avviato!');
-  } catch(e) {
-    console.error('Export error:', e);
-    showToast(e.message || 'Errore download', true);
-  }
-}
 
-function showDeleteCatalogModal() {
-  document.getElementById('modal-delete-catalog').style.display = 'flex';
-}
+    rows = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if not row or not row[0]:
+            continue
+        artista = str(row[0] or "").strip()
+        if artista.lower() in SKIP:
+            continue
+        if len(artista) <= 5 and len(row) > 1 and str(row[1] or "").strip().isdigit():
+            continue
+        rows.append(row)
 
-function hideDeleteCatalogModal() {
-  document.getElementById('modal-delete-catalog').style.display = 'none';
-}
+    total = len(rows)
 
-async function deleteCatalog() {
-  hideDeleteCatalogModal();
-  showToast('⏳ Eliminazione in corso…');
-  try {
-    const r = await fetch(`/api/catalogo/${STATE.userId}?token=${STATE.token}`, { method: 'DELETE' });
-    if (!r.ok) throw new Error('Errore eliminazione');
-    showToast('🗑 Catalogo eliminato');
-    STATE.vinyls = [];
-    renderList([]);
-    updateStats();
-  } catch(e) { showToast(e.message, true); }
-}
+    async def generate():
+        imported = 0
+        async with httpx.AsyncClient(timeout=20) as client:
+            for idx, row in enumerate(rows):
+                artista        = str(row[0] or "").strip()
+                titolo         = str(row[1] or "").strip()
+                formato        = str(row[2] or "").strip()
+                stile          = str(row[3] or "").strip()
+                anno           = str(row[4] or "").strip()
+                etichetta      = str(row[5] or "").strip()
+                stampa         = str(row[6] or "").strip()
+                stampa_costosa = str(row[7] or "").strip() if len(row) > 7 else ""
+                prezzo_max     = str(row[8] or "").strip() if len(row) > 8 else ""
 
-function showToast(msg, isError = false) {
-  const t = document.getElementById('toast');
-  t.textContent = msg;
-  t.className = 'toast show' + (isError ? ' error' : '');
-  setTimeout(() => t.className = 'toast', 3000);
-}
-</script>
-</body>
-</html>
+                # Manda progresso al frontend
+                yield f"data: {json.dumps({'done': False, 'current': idx+1, 'total': total, 'artista': artista}, ensure_ascii=False)}\n\n"
+
+                # Arricchisci solo se mancano campi (mai artista/titolo)
+                needs_enrich = not all([stampa, etichetta, stile, anno, stampa_costosa, prezzo_max])
+
+                if needs_enrich and DISCOGS_TOKEN:
+                    try:
+                        enriched = await cerca_su_discogs({
+                            "artista": artista, "titolo": titolo,
+                            "formato": formato, "stile": stile,
+                            "anno": anno, "etichetta": etichetta,
+                            "stampa": stampa,
+                            "stampa_costosa": stampa_costosa,
+                            "prezzo_max": prezzo_max,
+                        }, use_cache=True)
+                        # Aggiorna solo campi vuoti, mai artista/titolo
+                        if not formato:        formato        = enriched.get("formato", "")
+                        if not stile:          stile          = enriched.get("stile", "")
+                        if not anno:           anno           = enriched.get("anno", "")
+                        if not etichetta:      etichetta      = enriched.get("etichetta", "")
+                        if not stampa:         stampa         = enriched.get("stampa", "")
+                        if not stampa_costosa: stampa_costosa = enriched.get("stampa_costosa", "")
+                        if not prezzo_max:     prezzo_max     = enriched.get("prezzo_max", "")
+                    except Exception as e:
+                        print(f"ENRICH ERROR row {idx}: {e}")
+
+                try:
+                    await client.post(
+                        f"{SUPABASE_URL}/rest/v1/vinili",
+                        headers=supa_headers(token),
+                        json={
+                            "user_id": user_id,
+                            "artista": artista, "titolo": titolo,
+                            "formato": formato, "stile": stile,
+                            "anno": anno, "etichetta": etichetta,
+                            "stampa": stampa,
+                            "stampa_costosa": stampa_costosa,
+                            "prezzo_max": prezzo_max,
+                        }
+                    )
+                    imported += 1
+                except Exception as e:
+                    print(f"SAVE ERROR row {idx}: {e}")
+
+        yield f"data: {json.dumps({'done': True, 'imported': imported})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
+
+# ── Export Excel ──────────────────────────────────────────────────────────────
+
+@app.get("/api/export_excel/{user_id}")
+async def export_excel(user_id: str, token: str = ""):
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/vinili?user_id=eq.{user_id}&order=artista.asc",
+            headers=supa_headers(token)
+        )
+    if r.status_code != 200:
+        raise HTTPException(400, "Errore recupero dati")
+    vinili = r.json()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Catalogo Vinili"
+
+    header_fill = PatternFill(start_color="1a1a2e", end_color="1a1a2e", fill_type="solid")
+    header_font = Font(color="FFFFFF", bold=True, size=11)
+    col_headers = ["Artista", "Titolo", "Formato", "Stile", "Anno",
+                   "Etichetta", "Stampa", "Stampa piu Costosa", "Prezzo medio piu alto"]
+    col_widths   = [25, 30, 12, 20, 8, 20, 15, 22, 22]
+
+    for col, h in enumerate(col_headers, 1):
+        cell = ws.cell(row=1, column=col, value=h)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center")
+
+    for row_idx, v in enumerate(vinili, 2):
+        ws.cell(row=row_idx, column=1, value=v.get("artista", ""))
+        ws.cell(row=row_idx, column=2, value=v.get("titolo", ""))
+        ws.cell(row=row_idx, column=3, value=v.get("formato", ""))
+        ws.cell(row=row_idx, column=4, value=v.get("stile", ""))
+        ws.cell(row=row_idx, column=5, value=v.get("anno", ""))
+        ws.cell(row=row_idx, column=6, value=v.get("etichetta", ""))
+        ws.cell(row=row_idx, column=7, value=v.get("stampa", "") or v.get("catno", ""))
+        ws.cell(row=row_idx, column=8, value=v.get("stampa_costosa", ""))
+        ws.cell(row=row_idx, column=9, value=v.get("prezzo_max", ""))
+
+    for col, width in enumerate(col_widths, 1):
+        ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = width
+
+    formati_count = Counter()
+    totale_reale  = len(vinili)
+
+    for v in vinili:
+        fmt = str(v.get("formato", "") or "").strip().lower()
+        if not fmt:                                                   formati_count["altro"] += 1
+        elif '7' in fmt or '45' in fmt:                              formati_count['7"'] += 1
+        elif '10' in fmt:                                            formati_count['10"'] += 1
+        elif '12' in fmt:                                            formati_count['12"'] += 1
+        elif '2xlp' in fmt or '2x lp' in fmt or 'double' in fmt:    formati_count['2xLP'] += 1
+        elif 'lp' in fmt or '33' in fmt:                             formati_count['LP'] += 1
+        elif 'ep' in fmt:                                            formati_count['EP'] += 1
+        else:                                                        formati_count[fmt[:10]] += 1
+
+    last_row = ws.max_row + 2
+    title_cell = ws.cell(row=last_row, column=1, value="RIEPILOGO FORMATI")
+    title_cell.font = Font(bold=True, color="FFFFFF")
+    title_cell.fill = PatternFill(start_color="2d2d4e", end_color="2d2d4e", fill_type="solid")
+    last_row += 1
+
+    for fmt, count in sorted(formati_count.items()):
+        if count == 0: continue
+        c1 = ws.cell(row=last_row, column=1, value=fmt)
+        c2 = ws.cell(row=last_row, column=2, value=count)
+        c1.font = Font(bold=True, color="FFFFFF")
+        c1.fill = PatternFill(start_color="2d2d4e", end_color="2d2d4e", fill_type="solid")
+        c2.font = Font(bold=True, color="FFFFFF")
+        c2.fill = PatternFill(start_color="2d2d4e", end_color="2d2d4e", fill_type="solid")
+        last_row += 1
+
+    c1 = ws.cell(row=last_row, column=1, value="TOTALE VINILI")
+    c2 = ws.cell(row=last_row, column=2, value=totale_reale)
+    c1.font = Font(bold=True, color="FFFFFF", size=12)
+    c1.fill = PatternFill(start_color="4a0080", end_color="4a0080", fill_type="solid")
+    c2.font = Font(bold=True, color="FFFFFF", size=12)
+    c2.fill = PatternFill(start_color="4a0080", end_color="4a0080", fill_type="solid")
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return Response(
+        content=output.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": "attachment; filename=Catalogo_Vinili.xlsx",
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        }
+    )
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    with open("templates/index.html", "r") as f:
+        return f.read()
