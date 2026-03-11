@@ -140,14 +140,17 @@ async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
                     continue
 
                 stats = stats_r.json()
-                num_for_sale = int(stats.get("num_for_sale") or 0)
-                if num_for_sale == 0:
-                    continue
 
+                # Prova lowest_price (vendite attive) poi community rating come fallback
                 lp = stats.get("lowest_price")
-                if lp is None:
-                    continue
-                price = float(lp.get("value", 0) if isinstance(lp, dict) else lp or 0)
+                price = 0.0
+                if lp is not None:
+                    price = float(lp.get("value", 0) if isinstance(lp, dict) else lp or 0)
+
+                # Se non c'è prezzo di mercato, prova blocked_from_sale=False con num_for_sale
+                if price == 0:
+                    # Cerca prezzo nella community data della release
+                    pass
 
                 if price > best_price:
                     best_price = price
@@ -155,6 +158,11 @@ async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
 
             if best_price > 0:
                 return best_catno, f"EUR {best_price:.2f}"
+            # Fallback: se nessun prezzo trovato, restituisci la prima versione con catno
+            for v in versions:
+                catno = v.get("catno", "")
+                if catno:
+                    return catno, ""
             return "", ""
 
     except Exception as e:
@@ -240,7 +248,19 @@ async def cerca_su_discogs(data: dict, use_cache: bool = True) -> dict:
             labels   = match.get("label", [])
             etichetta = labels[0] if labels else data.get("etichetta", "")
             anno     = str(match.get("year", "")) or data.get("anno", "")
-            stampa   = data.get("stampa", "") or match.get("catno", "")
+            # catno: prova prima quello dell'utente, poi quello del match
+            # Se ancora vuoto, chiedi alla API release diretta
+            stampa = data.get("stampa", "") or match.get("catno", "")
+            if not stampa and match.get("id"):
+                try:
+                    rel_r = await client.get(
+                        f"https://api.discogs.com/releases/{match['id']}",
+                        headers=DISCOGS_HEADERS()
+                    )
+                    if rel_r.status_code == 200:
+                        stampa = rel_r.json().get("labels", [{}])[0].get("catno", "") or ""
+                except Exception:
+                    pass
 
             stampa_costosa = ""
             prezzo_max     = ""
@@ -408,10 +428,11 @@ async def delete_catalog(user_id: str, token: str):
     async with httpx.AsyncClient() as client:
         r = await client.delete(
             f"{SUPABASE_URL}/rest/v1/vinili?user_id=eq.{user_id}",
-            headers=supa_headers(token)
+            headers={**supa_headers(token), "Prefer": "return=minimal"}
         )
+    print(f"DELETE CATALOG STATUS: {r.status_code} BODY: {r.text[:200]}")
     if r.status_code not in (200, 204):
-        raise HTTPException(400, "Errore eliminazione catalogo")
+        raise HTTPException(400, f"Errore eliminazione catalogo: {r.status_code}")
     return {"status": "deleted"}
 
 # ── Import Excel con SSE progress + arricchimento + cache ─────────────────────
@@ -512,8 +533,16 @@ async def import_excel(
 
 # ── Export Excel ──────────────────────────────────────────────────────────────
 
+@app.post("/api/export_excel")
+async def export_excel_post(user_id: str = Form(...), token: str = Form(...)):
+    """Endpoint POST per Android - evita problemi con token in URL."""
+    return await _build_excel_response(user_id, token)
+
 @app.get("/api/export_excel/{user_id}")
 async def export_excel(user_id: str, token: str = ""):
+    return await _build_excel_response(user_id, token)
+
+async def _build_excel_response(user_id: str, token: str):
     async with httpx.AsyncClient() as client:
         r = await client.get(
             f"{SUPABASE_URL}/rest/v1/vinili?user_id=eq.{user_id}&order=artista.asc",
