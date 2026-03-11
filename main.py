@@ -1,4 +1,4 @@
-import os
+mport os
 import io
 import json
 import base64
@@ -55,7 +55,7 @@ def supa_headers(token: str = None, use_secret: bool = False):
     return h
 
 async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
-    """Cerca tutte le stampe di un master e trova quella col prezzo medio più alto."""
+    """Cerca tutte le stampe di un master e trova quella col prezzo medio pi alto."""
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.get(
@@ -91,7 +91,7 @@ async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
                         best_catno = catno
             
             if best_price > 0:
-                return best_catno, f"€{best_price:.2f}"
+                return best_catno, f"{best_price:.2f}"
             return "", ""
     except Exception as e:
         print(f"DISCOGS PRICE ERROR: {e}")
@@ -229,11 +229,11 @@ Estrai TUTTE le informazioni visibili e rispondi SOLO con JSON valido senza mark
 
 Istruzioni importanti:
 - "stampa" = numero di catalogo (catalog number / cat no / cat. no. / matrix number). Esempi: CBS 1234, CLMN-126, HS032, ATL-50234, 2C 006-93752, nr 015/B. Cercalo sul bordo, in basso, vicino al logo etichetta o inciso nella plastica.
-- "stile" = genere musicale visibile sull'etichetta (es: Soul, Jazz, Rock, Funk, Electronic, Classical). Se non visibile, deducilo dall'etichetta discografica (es: Blue Note → Jazz, Motown → Soul).
+- "stile" = genere musicale visibile sull'etichetta (es: Soul, Jazz, Rock, Funk, Electronic, Classical). Se non visibile, deducilo dall'etichetta discografica (es: Blue Note  Jazz, Motown  Soul).
 - "anno" = anno di pubblicazione (cerca numeri a 4 cifre tipo 1975, 2009 ecc)
 - "formato" = 7", 10", 12", LP, EP, 45rpm, 33rpm ecc
 - "etichetta" = nome dell'etichetta discografica (es: Atlantic, Fania, Columbia, Blue Note)
-- Se un campo non è visibile lascialo stringa vuota
+- Se un campo non  visibile lascialo stringa vuota
 - NON inventare dati non visibili nell'immagine"""
             payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime, "data": b64}}]}]}
             async with httpx.AsyncClient(timeout=30) as client:
@@ -340,7 +340,7 @@ async def import_excel(user_id: str = Form(...), token: str = Form(...), file: U
     return {"status": "ok", "imported": imported}
 
 
-# ── EXPORT EXCEL: GET con token come query param (compatibile mobile/Safari) ──
+#  EXPORT EXCEL: GET con token come query param (compatibile mobile/Safari) 
 @app.get("/api/export_excel/{user_id}")
 async def export_excel(user_id: str, token: str = ""):
     async with httpx.AsyncClient() as client:
@@ -358,7 +358,7 @@ async def export_excel(user_id: str, token: str = ""):
 
     header_fill = PatternFill(start_color="1a1a2e", end_color="1a1a2e", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True, size=11)
-    headers = ["Artista", "Titolo", "Formato", "Stile", "Anno", "Etichetta", "Stampa", "Stampa più Costosa", "Prezzo medio più alto"]
+    headers = ["Artista", "Titolo", "Formato", "Stile", "Anno", "Etichetta", "Stampa", "Stampa pi Costosa", "Prezzo medio pi alto"]
     col_widths = [25, 30, 12, 20, 8, 20, 15, 18, 20]
 
     for col, h in enumerate(headers, 1):
@@ -416,7 +416,8 @@ async def export_excel(user_id: str, token: str = ""):
     c2 = ws.cell(row=last_row, column=2, value=totale)
     c1.font = Font(bold=True, color="FFFFFF", size=12)
     c1.fill = PatternFill(start_color="4a0080", end_color="4a0080", fill_type="solid")
-    c2.font = c1.font; c2.fill = c1.fill
+    c2.font = Font(bold=True, color="FFFFFF", size=12)
+    c2.fill = PatternFill(start_color="4a0080", end_color="4a0080", fill_type="solid")
 
     output = io.BytesIO()
     wb.save(output)
