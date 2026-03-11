@@ -213,11 +213,11 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
       <span class="txt">Scansiona etichetta<small>Fotografa e aggiungi un disco</small></span>
     </button>
     <p class="section-label" style="margin-top:20px">File Excel</p>
-    <label class="btn-action bg-blue" style="cursor:pointer">
+    <button class="btn-action bg-blue" onclick="document.getElementById('import-excel-input').click()">
       <span class="icon">📂</span>
       <span class="txt">Carica Excel esistente<small>Importa un catalogo precedente</small></span>
-      <input type="file" accept=".xlsx" style="display:none" onchange="importExcel(event)">
-    </label>
+    </button>
+    <input type="file" accept=".xlsx,.xls" id="import-excel-input" style="position:fixed;top:-9999px;left:-9999px;opacity:0;width:1px;height:1px" onchange="importExcel(event)">
     <button class="btn-action bg-green" onclick="exportExcel()">
       <span class="icon">⬇️</span>
       <span class="txt">Scarica catalogo<small>Salva il file .xlsx sul telefono</small></span>
@@ -535,11 +535,17 @@ async function importExcel(event) {
 }
 
 async function exportExcel() {
+  showToast('⏳ Preparazione file…');
   try {
-    const url = `/api/export_excel/${STATE.userId}?token=${STATE.token}`;
+    // Usa GET con token come query param: funziona su Safari/iOS/Android
+    const url = `/api/export_excel/${STATE.userId}?token=${encodeURIComponent(STATE.token)}`;
     const a = document.createElement('a');
-    a.href = url; a.download = 'Catalogo_Vinili.xlsx';
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    a.href = url;
+    a.download = 'Catalogo_Vinili.xlsx';
+    a.target = '_blank'; // fallback per iOS Safari che non supporta download attr
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
     showToast('📥 Download avviato!');
   } catch(e) { showToast(e.message, true); }
 }
