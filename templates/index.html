@@ -117,20 +117,20 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
 .toast { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%); background: #0f9b58; color: white; padding: 10px 22px; border-radius: 20px; font-size: 13px; font-weight: 600; z-index: 999; opacity: 0; transition: opacity 0.3s; white-space: nowrap; pointer-events: none; }
 .toast.show { opacity: 1; }
 .toast.error { background: #e94560; }
-/* ── DETAIL MODAL ── */
-.detail-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.8); z-index: 300; display: flex; align-items: flex-end; justify-content: center; }
-.detail-sheet { background: #0f3460; border-radius: 20px 20px 0 0; padding: 24px 20px 40px; width: 100%; max-width: 500px; max-height: 85vh; overflow-y: auto; }
-.detail-sheet h2 { font-size: 17px; font-weight: 700; margin-bottom: 4px; }
-.detail-sheet .dsub { font-size: 13px; color: #aaa; margin-bottom: 20px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.detail-row { display: flex; justify-content: space-between; align-items: flex-start; padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.07); gap: 12px; }
-.detail-row:last-child { border-bottom: none; }
-.detail-label { font-size: 11px; color: #aaa; text-transform: uppercase; letter-spacing: 0.5px; flex-shrink: 0; width: 130px; }
-.detail-value { font-size: 14px; font-weight: 500; text-align: right; word-break: break-word; }
-.detail-highlight { color: #e94560; font-weight: 700; font-size: 15px; }
-.detail-close { display: block; width: 100%; padding: 13px; background: #533483; border: none; border-radius: 12px; color: white; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 20px; }
-.vinyl-item { cursor: pointer; }
-.vinyl-item:active { background: #1a3a6e; }
-.price-badge { color: #e94560; font-size: 11px; margin-top: 3px; }
+/* DETAIL MODAL */
+.detail-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:300;display:flex;align-items:flex-end;justify-content:center;}
+.detail-sheet{background:#0f3460;border-radius:20px 20px 0 0;padding:24px 20px 40px;width:100%;max-width:500px;max-height:85vh;overflow-y:auto;}
+.detail-sheet h2{font-size:17px;font-weight:700;margin-bottom:4px;}
+.dsub{font-size:13px;color:#aaa;margin-bottom:20px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.drow{display:flex;justify-content:space-between;align-items:flex-start;padding:10px 0;border-bottom:1px solid rgba(255,255,255,0.07);gap:12px;}
+.drow:last-child{border-bottom:none;}
+.dlabel{font-size:11px;color:#aaa;text-transform:uppercase;letter-spacing:0.5px;flex-shrink:0;width:130px;}
+.dvalue{font-size:14px;font-weight:500;text-align:right;word-break:break-word;}
+.dred{color:#e94560;font-weight:700;font-size:15px;}
+.dclose{display:block;width:100%;padding:13px;background:#533483;border:none;border-radius:12px;color:white;font-size:15px;font-weight:600;cursor:pointer;margin-top:20px;}
+.vinyl-item{cursor:pointer;}
+.vinyl-item:active{background:#1a3a6e;}
+.pbadge{color:#e94560;font-size:11px;margin-top:3px;}
 
 </style>
 </head>
@@ -320,19 +320,18 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
 </div>
 
 
-<!-- DETAIL MODAL -->
 <div class="detail-overlay" id="detail-overlay" style="display:none" onclick="if(event.target===this)this.style.display='none'">
   <div class="detail-sheet">
-    <h2 id="d-artista">—</h2>
-    <div class="dsub" id="d-titolo">—</div>
-    <div class="detail-row"><span class="detail-label">Formato</span><span class="detail-value" id="d-formato">—</span></div>
-    <div class="detail-row"><span class="detail-label">Anno</span><span class="detail-value" id="d-anno">—</span></div>
-    <div class="detail-row"><span class="detail-label">Etichetta</span><span class="detail-value" id="d-etichetta">—</span></div>
-    <div class="detail-row"><span class="detail-label">Stile</span><span class="detail-value" id="d-stile">—</span></div>
-    <div class="detail-row"><span class="detail-label">Stampa (tua)</span><span class="detail-value" id="d-stampa">—</span></div>
-    <div class="detail-row"><span class="detail-label">Stampa + costosa</span><span class="detail-value detail-highlight" id="d-stampa-costosa">—</span></div>
-    <div class="detail-row"><span class="detail-label">Prezzo medio</span><span class="detail-value detail-highlight" id="d-prezzo">—</span></div>
-    <button class="detail-close" onclick="document.getElementById('detail-overlay').style.display='none'">Chiudi</button>
+    <h2 id="d-artista"></h2>
+    <div class="dsub" id="d-titolo"></div>
+    <div class="drow"><span class="dlabel">Formato</span><span class="dvalue" id="d-formato">-</span></div>
+    <div class="drow"><span class="dlabel">Anno</span><span class="dvalue" id="d-anno">-</span></div>
+    <div class="drow"><span class="dlabel">Etichetta</span><span class="dvalue" id="d-etichetta">-</span></div>
+    <div class="drow"><span class="dlabel">Stile</span><span class="dvalue" id="d-stile">-</span></div>
+    <div class="drow"><span class="dlabel">Stampa (tua)</span><span class="dvalue" id="d-stampa">-</span></div>
+    <div class="drow"><span class="dlabel">Stampa + costosa</span><span class="dvalue dred" id="d-stampa-costosa">-</span></div>
+    <div class="drow"><span class="dlabel">Prezzo medio</span><span class="dvalue dred" id="d-prezzo">-</span></div>
+    <button class="dclose" onclick="document.getElementById('detail-overlay').style.display='none'">Chiudi</button>
   </div>
 </div>
 <div class="toast" id="toast"></div>
@@ -497,20 +496,20 @@ function renderList(vinyls) {
     el.innerHTML = '<div class="empty-state"><span>📭</span><p>Nessun disco ancora.<br>Inizia a scansionare!</p></div>';
     return;
   }
-  el.innerHTML = vinyls.map(v => `
-    <div class="vinyl-item" onclick="openDetail(${v.id})">
-      <div class="vinyl-disc">🖤</div>
-      <div class="vinyl-info">
-        <h4>${v.artista || '—'}</h4>
-        <p>${[v.titolo, v.anno, v.etichetta].filter(Boolean).join(' · ')}</p>
-        ${v.prezzo_max ? '<p class="price-badge">💰 ' + v.prezzo_max + '</p>' : ''}
-      </div>
-      ${v.formato ? '<span class="vinyl-tag">' + v.formato + '</span>' : ''}
-      <button class="btn-delete" onclick="event.stopPropagation();deleteVinyl(${v.id})">🗑</button>
-    </div>
-  `).join('');
+  el.innerHTML = vinyls.map(v => {
+    const price = v.prezzo_max ? '<p class="pbadge">💰 ' + v.prezzo_max + '</p>' : '';
+    const fmt   = v.formato ? '<span class="vinyl-tag">' + v.formato + '</span>' : '';
+    return '<div class="vinyl-item" onclick="openDetail(' + v.id + ')">' +
+      '<div class="vinyl-disc">🖤</div>' +
+      '<div class="vinyl-info">' +
+        '<h4>' + (v.artista || '—') + '</h4>' +
+        '<p>' + [v.titolo, v.anno, v.etichetta].filter(Boolean).join(' · ') + '</p>' +
+        price +
+      '</div>' + fmt +
+      '<button class="btn-delete" onclick="event.stopPropagation();deleteVinyl(' + v.id + ')">🗑</button>' +
+    '</div>';
+  }).join('');
 }
-
 function filterList(q) {
   const filtered = STATE.vinyls.filter(v =>
     (v.artista||'').toLowerCase().includes(q.toLowerCase()) ||
@@ -596,23 +595,28 @@ async function importExcel(event) {
 }
 
 async function exportExcel() {
-  if (!STATE.userId || !STATE.token) return showToast('Devi essere loggato', true);
+  if (!STATE.userId||!STATE.token) return showToast('Devi essere loggato',true);
   showToast('⏳ Preparazione file…');
-  // Download diretto senza fetch/blob: il browser gestisce il download nativo
-  // Compatibile con Android Chrome, iOS Safari, PC
-  const url = '/api/export_excel/' + STATE.userId + '?token=' + encodeURIComponent(STATE.token);
+  const isAndroid = /Android/i.test(navigator.userAgent);
   const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
-  if (isIOS) {
-    window.open(url, '_blank');
+  if (isAndroid) {
+    // Android: form POST -> browser gestisce download nativo
+    const form = document.createElement('form');
+    form.method='POST'; form.action='/api/export_excel'; form.style.display='none';
+    [['user_id',STATE.userId],['token',STATE.token]].forEach(([n,v])=>{
+      const i=document.createElement('input'); i.type='hidden'; i.name=n; i.value=v; form.appendChild(i);
+    });
+    document.body.appendChild(form); form.submit();
+    setTimeout(()=>document.body.removeChild(form),3000);
+  } else if (isIOS) {
+    window.open('/api/export_excel/'+STATE.userId+'?token='+encodeURIComponent(STATE.token),'_blank');
   } else {
-    const a = document.createElement('a');
-    a.href = url;
-    a.setAttribute('download', 'Catalogo_Vinili.xlsx');
-    a.style.position = 'fixed';
-    a.style.top = '-100px';
-    document.body.appendChild(a);
-    a.click();
-    setTimeout(function() { document.body.removeChild(a); }, 2000);
+    const a=document.createElement('a');
+    a.href='/api/export_excel/'+STATE.userId+'?token='+encodeURIComponent(STATE.token);
+    a.setAttribute('download','Catalogo_Vinili.xlsx');
+    a.style.position='fixed'; a.style.top='-100px';
+    document.body.appendChild(a); a.click();
+    setTimeout(()=>document.body.removeChild(a),2000);
   }
   showToast('📥 Download avviato!');
 }
@@ -632,18 +636,18 @@ async function deleteCatalog() {
 
 
 function openDetail(id) {
-  const v = STATE.vinyls.find(function(x){ return x.id === id; });
+  const v = STATE.vinyls.find(function(x){return x.id===id;});
   if (!v) return;
-  document.getElementById('d-artista').textContent        = v.artista || '—';
-  document.getElementById('d-titolo').textContent         = v.titolo  || '—';
-  document.getElementById('d-formato').textContent        = v.formato || '—';
-  document.getElementById('d-anno').textContent           = v.anno    || '—';
-  document.getElementById('d-etichetta').textContent      = v.etichetta || '—';
-  document.getElementById('d-stile').textContent          = v.stile   || '—';
-  document.getElementById('d-stampa').textContent         = v.stampa  || v.catno || '—';
-  document.getElementById('d-stampa-costosa').textContent = v.stampa_costosa || '—';
-  document.getElementById('d-prezzo').textContent         = v.prezzo_max || '—';
-  document.getElementById('detail-overlay').style.display = 'flex';
+  document.getElementById('d-artista').textContent = v.artista||'';
+  document.getElementById('d-titolo').textContent  = v.titolo||'';
+  document.getElementById('d-formato').textContent = v.formato||'-';
+  document.getElementById('d-anno').textContent    = v.anno||'-';
+  document.getElementById('d-etichetta').textContent = v.etichetta||'-';
+  document.getElementById('d-stile').textContent   = v.stile||'-';
+  document.getElementById('d-stampa').textContent  = v.stampa||v.catno||'-';
+  document.getElementById('d-stampa-costosa').textContent = v.stampa_costosa||'-';
+  document.getElementById('d-prezzo').textContent  = v.prezzo_max||'-';
+  document.getElementById('detail-overlay').style.display='flex';
 }
 
 function showToast(msg, isError = false) {
