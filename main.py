@@ -3,10 +3,8 @@ import io
 import json
 import base64
 import httpx
-import subprocess
-import tempfile
-from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
-from fastapi.responses import FileResponse, HTMLResponse, Response
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 from typing import Optional
 from openpyxl import Workbook, load_workbook
@@ -55,13 +53,22 @@ def supa_headers(token: str = None, use_secret: bool = False):
     return h
 
 async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
-    """Cerca tutte le versioni di un master e trova quella con avg_price piu alto."""
+    """
+    Cerca tutte le versioni di un master su Discogs.
+    Usa /marketplace/stats/{release_id} che restituisce:
+      - lowest_price: {"currency": "EUR", "value": 5.0}
+      - num_for_sale: int
+    Non esiste avg_price nelle API pubbliche Discogs, quindi:
+    usiamo il highest 'lowest_price' tra tutte le versioni come proxy
+    del valore di mercato della stampa piu pregiata.
+    """
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with httpx.AsyncClient(timeout=20) as client:
+            # Prendi tutte le versioni del master
             r = await client.get(
                 f"https://api.discogs.com/masters/{master_id}/versions",
                 headers=DISCOGS_HEADERS(),
-                params={"per_page": 50}
+                params={"per_page": 100, "sort": "released", "sort_order": "asc"}
             )
             if r.status_code != 200:
                 return "", ""
@@ -73,29 +80,35 @@ async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
             for v in versions:
                 release_id = v.get("id")
                 catno = v.get("catno", "")
-                if not release_id:
+                if not release_id or not catno:
                     continue
 
                 stats_r = await client.get(
                     f"https://api.discogs.com/marketplace/stats/{release_id}",
                     headers=DISCOGS_HEADERS()
                 )
-                if stats_r.status_code == 200:
-                    stats = stats_r.json()
+                if stats_r.status_code != 200:
+                    continue
 
-                    # Usa median_price o avg_price (prezzo medio di vendita)
-                    avg = stats.get("median_price") or stats.get("avg_price") or {}
-                    if isinstance(avg, dict):
-                        price = float(avg.get("value", 0) or 0)
-                    else:
-                        price = float(avg or 0)
+                stats = stats_r.json()
+                num_for_sale = stats.get("num_for_sale", 0) or 0
 
-                    if price > best_price:
-                        best_price = price
-                        best_catno = catno
+                # Considera solo versioni effettivamente in vendita
+                if num_for_sale == 0:
+                    continue
+
+                lp = stats.get("lowest_price") or {}
+                if isinstance(lp, dict):
+                    price = float(lp.get("value", 0) or 0)
+                else:
+                    price = float(lp or 0)
+
+                if price > best_price:
+                    best_price = price
+                    best_catno = catno
 
             if best_price > 0:
-                return best_catno, f"EUR{best_price:.2f}"
+                return best_catno, f"EUR {best_price:.2f}"
             return "", ""
 
     except Exception as e:
@@ -107,8 +120,8 @@ async def cerca_su_discogs(gemini_data: dict) -> dict:
         return gemini_data
 
     query_parts = []
-    if gemini_data.get("stampa") or gemini_data.get("catno"):
-        query_parts.append(gemini_data.get("stampa") or gemini_data.get("catno", ""))
+    if gemini_data.get("stampa"):
+        query_parts.append(gemini_data["stampa"])
     if gemini_data.get("artista"):
         query_parts.append(gemini_data["artista"])
     if gemini_data.get("titolo"):
@@ -125,9 +138,8 @@ async def cerca_su_discogs(gemini_data: dict) -> dict:
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             params = {"q": query, "type": "release", "per_page": 3}
-            catno = gemini_data.get("stampa") or gemini_data.get("catno", "")
-            if catno:
-                params["catno"] = catno
+            if gemini_data.get("stampa"):
+                params["catno"] = gemini_data["stampa"]
 
             r = await client.get(
                 "https://api.discogs.com/database/search",
@@ -221,26 +233,44 @@ async def login(data: LoginData):
 @app.post("/api/scan")
 async def scan_label(file: UploadFile = File(...)):
     content = await file.read()
-    gemini_data = {"artista": "", "titolo": "", "formato": "", "stile": "", "anno": "", "etichetta": "", "stampa": "", "stampa_costosa": "", "prezzo_max": ""}
+    gemini_data = {
+        "artista": "", "titolo": "", "formato": "", "stile": "",
+        "anno": "", "etichetta": "", "stampa": "",
+        "stampa_costosa": "", "prezzo_max": ""
+    }
 
     if GEMINI_KEY:
         try:
             b64 = base64.b64encode(content).decode()
             mime = file.content_type or "image/jpeg"
-            gemini_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_KEY}"
-            prompt = """Analizza questa immagine di un'etichetta o copertina di disco vinile.
-Estrai TUTTE le informazioni visibili e rispondi SOLO con JSON valido senza markdown:
+            gemini_url = (
+                f"https://generativelanguage.googleapis.com/v1beta/models/"
+                f"gemini-2.5-flash:generateContent?key={GEMINI_KEY}"
+            )
+            prompt = """Analizza questa immagine di un'etichetta di disco vinile.
+Estrai le informazioni visibili e rispondi SOLO con JSON valido senza markdown:
 {"artista":"","titolo":"","formato":"","stile":"","anno":"","etichetta":"","stampa":""}
 
-Istruzioni importanti:
-- "stampa" = numero di catalogo (catalog number / cat no / cat. no. / matrix number). Esempi: CBS 1234, CLMN-126, HS032, ATL-50234, 2C 006-93752, nr 015/B. Cercalo sul bordo, in basso, vicino al logo etichetta o inciso nella plastica.
-- "stile" = genere musicale visibile sull'etichetta (es: Soul, Jazz, Rock, Funk, Electronic, Classical). Se non visibile, deducilo dall'etichetta discografica (es: Blue Note = Jazz, Motown = Soul).
-- "anno" = anno di pubblicazione (cerca numeri a 4 cifre tipo 1975, 2009 ecc)
-- "formato" = 7", 10", 12", LP, EP, 45rpm, 33rpm ecc
-- "etichetta" = nome dell'etichetta discografica (es: Atlantic, Fania, Columbia, Blue Note)
-- Se un campo non e' visibile lascialo stringa vuota
-- NON inventare dati non visibili nell'immagine"""
-            payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime, "data": b64}}]}]}
+REGOLE FONDAMENTALI:
+- "stampa" = numero di catalogo (catalog number). Esempi validi: CBS 1234, HS-032, ATL-50234, 2C 006-93752, CLMN-126.
+  Il catalog number e' stampato vicino al logo dell'etichetta, sul bordo dell'etichetta, o inciso nella plastica.
+  NON e' il codice a barre EAN/barcode (sequenza numerica lunga tipo 3700426913386).
+  NON e' il numero ISRC. Se non trovi un catalog number chiaro, lascia "stampa" vuoto.
+- "artista" = nome dell'artista o band principale sull'etichetta
+- "titolo" = titolo del brano o album. Se ci sono piu brani (Side A / Side B) usa il titolo del Side A
+- "formato" = 7", 10", 12", LP, EP, 45rpm, 33rpm. Se non visibile deducilo dalla dimensione apparente
+- "stile" = genere musicale. Se non visibile deducilo dall'etichetta (Blue Note=Jazz, Motown=Soul, ecc.)
+- "anno" = anno a 4 cifre (es. 1975). NON confondere con numeri di catalogo
+- "etichetta" = nome etichetta discografica (es: Atlantic, Columbia, Heavenly Sweetness)
+- Lascia vuoto qualsiasi campo non chiaramente visibile. NON inventare."""
+            payload = {
+                "contents": [{
+                    "parts": [
+                        {"text": prompt},
+                        {"inline_data": {"mime_type": mime, "data": b64}}
+                    ]
+                }]
+            }
             async with httpx.AsyncClient(timeout=30) as client:
                 r = await client.post(gemini_url, json=payload)
             print(f"GEMINI STATUS: {r.status_code}")
@@ -249,7 +279,13 @@ Istruzioni importanti:
                 print(f"GEMINI TEXT: {text[:500]}")
                 text = text.strip().replace("```json", "").replace("```", "").strip()
                 try:
-                    gemini_data.update(json.loads(text))
+                    parsed = json.loads(text)
+                    # Sanity check: se "stampa" sembra un barcode EAN (solo cifre, >10 char) -> svuota
+                    stampa_val = str(parsed.get("stampa", "")).strip()
+                    if stampa_val.isdigit() and len(stampa_val) >= 10:
+                        print(f"BARCODE DETECTED, clearing stampa: {stampa_val}")
+                        parsed["stampa"] = ""
+                    gemini_data.update(parsed)
                 except Exception as pe:
                     print(f"JSON PARSE ERROR: {pe}")
             else:
@@ -267,10 +303,12 @@ async def add_vinyl(v: VinylData):
         r = await client.post(
             f"{SUPABASE_URL}/rest/v1/vinili",
             headers=supa_headers(v.access_token),
-            json={"user_id": v.user_id, "artista": v.artista, "titolo": v.titolo,
-                  "formato": v.formato, "stile": v.stile, "anno": v.anno,
-                  "etichetta": v.etichetta, "stampa": v.stampa,
-                  "stampa_costosa": v.stampa_costosa, "prezzo_max": v.prezzo_max}
+            json={
+                "user_id": v.user_id, "artista": v.artista, "titolo": v.titolo,
+                "formato": v.formato, "stile": v.stile, "anno": v.anno,
+                "etichetta": v.etichetta, "stampa": v.stampa,
+                "stampa_costosa": v.stampa_costosa, "prezzo_max": v.prezzo_max
+            }
         )
     print(f"SAVE STATUS: {r.status_code} RESPONSE: {r.text[:200]}")
     if r.status_code not in (200, 201):
@@ -311,33 +349,45 @@ async def delete_catalog(user_id: str, token: str):
     return {"status": "deleted"}
 
 @app.post("/api/import_excel")
-async def import_excel(user_id: str = Form(...), token: str = Form(...), file: UploadFile = File(...)):
+async def import_excel(
+    user_id: str = Form(...),
+    token: str = Form(...),
+    file: UploadFile = File(...)
+):
     content = await file.read()
     wb = load_workbook(io.BytesIO(content))
     ws = wb.active
     imported = 0
-    TOTALI = {'7"', '10"', '12"', '4"', 'lp', '2xlp', '2x lp', 'ep', 'single', 'riepilogo formati', 'totale vinili'}
+    SKIP = {
+        '7"', '10"', '12"', '4"', 'lp', '2xlp', '2x lp', 'ep',
+        'single', 'riepilogo formati', 'totale vinili', 'artista'
+    }
 
     async with httpx.AsyncClient() as client:
         for row in ws.iter_rows(min_row=2, values_only=True):
             if not row or not row[0]:
                 continue
             artista = str(row[0] or "").strip()
-            if artista.lower() in TOTALI or (len(artista) <= 5 and str(row[1] or "").isdigit()):
+            if artista.lower() in SKIP:
+                continue
+            # Salta righe del riepilogo (es. "LP" con numero a fianco)
+            if len(artista) <= 5 and len(row) > 1 and str(row[1] or "").strip().isdigit():
                 continue
             await client.post(
                 f"{SUPABASE_URL}/rest/v1/vinili",
                 headers=supa_headers(token),
-                json={"user_id": user_id,
-                      "artista": artista,
-                      "titolo": str(row[1] or ""),
-                      "formato": str(row[2] or ""),
-                      "stile": str(row[3] or ""),
-                      "anno": str(row[4] or ""),
-                      "etichetta": str(row[5] or ""),
-                      "stampa": str(row[6] or ""),
-                      "stampa_costosa": str(row[7] or "") if len(row) > 7 else "",
-                      "prezzo_max": str(row[8] or "") if len(row) > 8 else ""}
+                json={
+                    "user_id": user_id,
+                    "artista": artista,
+                    "titolo": str(row[1] or ""),
+                    "formato": str(row[2] or ""),
+                    "stile": str(row[3] or ""),
+                    "anno": str(row[4] or ""),
+                    "etichetta": str(row[5] or ""),
+                    "stampa": str(row[6] or ""),
+                    "stampa_costosa": str(row[7] or "") if len(row) > 7 else "",
+                    "prezzo_max": str(row[8] or "") if len(row) > 8 else ""
+                }
             )
             imported += 1
     return {"status": "ok", "imported": imported}
@@ -358,17 +408,22 @@ async def export_excel(user_id: str, token: str = ""):
     ws = wb.active
     ws.title = "Catalogo Vinili"
 
+    # ── Intestazioni ──────────────────────────────────────────
     header_fill = PatternFill(start_color="1a1a2e", end_color="1a1a2e", fill_type="solid")
     header_font = Font(color="FFFFFF", bold=True, size=11)
-    headers = ["Artista", "Titolo", "Formato", "Stile", "Anno", "Etichetta", "Stampa", "Stampa piu Costosa", "Prezzo medio piu alto"]
+    col_headers = [
+        "Artista", "Titolo", "Formato", "Stile", "Anno",
+        "Etichetta", "Stampa", "Stampa piu Costosa", "Prezzo medio piu alto"
+    ]
     col_widths = [25, 30, 12, 20, 8, 20, 15, 22, 22]
 
-    for col, h in enumerate(headers, 1):
+    for col, h in enumerate(col_headers, 1):
         cell = ws.cell(row=1, column=col, value=h)
         cell.fill = header_fill
         cell.font = header_font
         cell.alignment = Alignment(horizontal="center")
 
+    # ── Righe dati ────────────────────────────────────────────
     for row_idx, v in enumerate(vinili, 2):
         ws.cell(row=row_idx, column=1, value=v.get("artista", ""))
         ws.cell(row=row_idx, column=2, value=v.get("titolo", ""))
@@ -383,39 +438,57 @@ async def export_excel(user_id: str, token: str = ""):
     for col, width in enumerate(col_widths, 1):
         ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = width
 
-    # Riepilogo formati in fondo
+    # ── Riepilogo formati ─────────────────────────────────────
+    # Conta TUTTI i vinili indipendentemente dal formato riconosciuto
     formati_count = Counter()
+    totale_reale = len(vinili)  # contatore reale = tutte le righe del DB
+
     for v in vinili:
         fmt = str(v.get("formato", "") or "").strip().lower()
-        if fmt:
-            if '7' in fmt:                                            formati_count['7"'] += 1
-            elif '10' in fmt:                                         formati_count['10"'] += 1
-            elif '12' in fmt:                                         formati_count['12"'] += 1
-            elif '2xlp' in fmt or '2x lp' in fmt or 'double' in fmt: formati_count['2xLP'] += 1
-            elif 'lp' in fmt:                                         formati_count['LP'] += 1
-            else:                                                     formati_count[fmt[:10]] += 1
+        if not fmt:
+            formati_count["altro"] += 1
+        elif '7' in fmt:
+            formati_count['7"'] += 1
+        elif '10' in fmt:
+            formati_count['10"'] += 1
+        elif '12' in fmt:
+            formati_count['12"'] += 1
+        elif '2xlp' in fmt or '2x lp' in fmt or 'double' in fmt:
+            formati_count['2xLP'] += 1
+        elif 'lp' in fmt:
+            formati_count['LP'] += 1
+        elif 'ep' in fmt:
+            formati_count['EP'] += 1
+        elif '45' in fmt:
+            formati_count['45rpm'] += 1
+        elif '33' in fmt:
+            formati_count['33rpm'] += 1
+        else:
+            formati_count[fmt[:10]] += 1
 
     last_row = ws.max_row + 2
 
+    # Titolo riepilogo
     title_cell = ws.cell(row=last_row, column=1, value="RIEPILOGO FORMATI")
     title_cell.font = Font(bold=True, color="FFFFFF")
     title_cell.fill = PatternFill(start_color="2d2d4e", end_color="2d2d4e", fill_type="solid")
     last_row += 1
 
-    totale = 0
-    for fmt in ['4"', '7"', '10"', '12"', 'LP', '2xLP']:
-        count = formati_count.get(fmt, 0)
+    # Righe per formato
+    for fmt, count in sorted(formati_count.items()):
+        if count == 0:
+            continue
         c1 = ws.cell(row=last_row, column=1, value=fmt)
         c2 = ws.cell(row=last_row, column=2, value=count)
         c1.font = Font(bold=True, color="FFFFFF")
         c1.fill = PatternFill(start_color="2d2d4e", end_color="2d2d4e", fill_type="solid")
         c2.font = Font(bold=True, color="FFFFFF")
         c2.fill = PatternFill(start_color="2d2d4e", end_color="2d2d4e", fill_type="solid")
-        totale += count
         last_row += 1
 
+    # TOTALE REALE (da DB, non somma dei formati)
     c1 = ws.cell(row=last_row, column=1, value="TOTALE VINILI")
-    c2 = ws.cell(row=last_row, column=2, value=totale)
+    c2 = ws.cell(row=last_row, column=2, value=totale_reale)
     c1.font = Font(bold=True, color="FFFFFF", size=12)
     c1.fill = PatternFill(start_color="4a0080", end_color="4a0080", fill_type="solid")
     c2.font = Font(bold=True, color="FFFFFF", size=12)
@@ -424,10 +497,16 @@ async def export_excel(user_id: str, token: str = ""):
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
+
     return Response(
         content=output.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=Catalogo_Vinili.xlsx"}
+        headers={
+            "Content-Disposition": "attachment; filename=Catalogo_Vinili.xlsx",
+            "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Pragma": "no-cache"
+        }
     )
 
 @app.get("/", response_class=HTMLResponse)
