@@ -6,7 +6,7 @@ import httpx
 import subprocess
 import tempfile
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from pydantic import BaseModel
 from typing import Optional
 from openpyxl import Workbook, load_workbook
@@ -228,12 +228,13 @@ Estrai TUTTE le informazioni visibili e rispondi SOLO con JSON valido senza mark
 {"artista":"","titolo":"","formato":"","stile":"","anno":"","etichetta":"","stampa":""}
 
 Istruzioni importanti:
-- "stampa" = numero di catalogo (cat no, catalog number, es: CBS 1234, CLMN-126, HS032, nr 015/B)
+- "stampa" = numero di catalogo (catalog number / cat no / cat. no. / matrix number). Esempi: CBS 1234, CLMN-126, HS032, ATL-50234, 2C 006-93752, nr 015/B. Cercalo sul bordo, in basso, vicino al logo etichetta o inciso nella plastica.
+- "stile" = genere musicale visibile sull'etichetta (es: Soul, Jazz, Rock, Funk, Electronic, Classical). Se non visibile, deducilo dall'etichetta discografica (es: Blue Note → Jazz, Motown → Soul).
 - "anno" = anno di pubblicazione (cerca numeri a 4 cifre tipo 1975, 2009 ecc)
-- "formato" = 7", 10", 12", LP, EP, 45rpm ecc
-- "etichetta" = nome dell'etichetta discografica (es: Atlantic, Fania, Columbia)
+- "formato" = 7", 10", 12", LP, EP, 45rpm, 33rpm ecc
+- "etichetta" = nome dell'etichetta discografica (es: Atlantic, Fania, Columbia, Blue Note)
 - Se un campo non è visibile lascialo stringa vuota
-- Cerca bene il numero di catalogo, spesso è stampato in piccolo sul bordo o in basso"""
+- NON inventare dati non visibili nell'immagine"""
             payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": mime, "data": b64}}]}]}
             async with httpx.AsyncClient(timeout=30) as client:
                 r = await client.post(gemini_url, json=payload)
@@ -252,6 +253,8 @@ Istruzioni importanti:
             print(f"GEMINI EXCEPTION: {e}")
 
     result = await cerca_su_discogs(gemini_data)
+    # Assicura che catno sia sempre presente (il frontend legge 'catno')
+    result["catno"] = result.get("stampa", "")
     return result
 
 @app.post("/api/vinile")
@@ -415,14 +418,13 @@ async def export_excel(user_id: str, token: str = ""):
     c1.fill = PatternFill(start_color="4a0080", end_color="4a0080", fill_type="solid")
     c2.font = c1.font; c2.fill = c1.fill
 
-    from fastapi.responses import Response
     output = io.BytesIO()
     wb.save(output)
     output.seek(0)
     return Response(
         content=output.getvalue(),
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=\"Catalogo_Vinili.xlsx\""}
+        headers={"Content-Disposition": "attachment; filename=Catalogo_Vinili.xlsx"}
     )
 
 @app.get("/", response_class=HTMLResponse)
