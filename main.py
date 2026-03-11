@@ -75,7 +75,6 @@ async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
                 catno = v.get("catno", "")
                 if not release_id:
                     continue
-                # Prendi statistiche marketplace
                 stats_r = await client.get(
                     f"https://api.discogs.com/marketplace/stats/{release_id}",
                     headers=DISCOGS_HEADERS()
@@ -158,10 +157,8 @@ async def cerca_su_discogs(gemini_data: dict) -> dict:
             etichetta = labels[0] if labels else gemini_data.get("etichetta", "")
 
             anno = str(match.get("year", "")) or gemini_data.get("anno", "")
-            # Priorità: catno di Gemini (dall'etichetta fisica) > catno di Discogs
             stampa = gemini_data.get("stampa", "") or match.get("catno", "")
 
-            # Cerca prezzo max se abbiamo master_id
             stampa_costosa = ""
             prezzo_max = ""
             master_id = match.get("master_id")
@@ -339,10 +336,10 @@ async def import_excel(user_id: str = Form(...), token: str = Form(...), file: U
             imported += 1
     return {"status": "ok", "imported": imported}
 
-@app.post("/api/export_excel/{user_id}")
-async def export_excel(user_id: str, request: Request):
-    body = await request.json()
-    token = body.get("token", "")
+
+# ── EXPORT EXCEL: GET con token come query param (compatibile mobile/Safari) ──
+@app.get("/api/export_excel/{user_id}")
+async def export_excel(user_id: str, token: str = ""):
     async with httpx.AsyncClient() as client:
         r = await client.get(
             f"{SUPABASE_URL}/rest/v1/vinili?user_id=eq.{user_id}&order=artista.asc",
