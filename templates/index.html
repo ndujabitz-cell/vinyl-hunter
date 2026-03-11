@@ -12,7 +12,7 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
 
 /* ── HEADER ── */
 .header { background: linear-gradient(135deg, #0f3460, #533483); padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 12px rgba(0,0,0,0.4); }
-.header h1 { font-size: 18px; font-weight: 700; }
+.header h1 { font-size: 22px; font-weight: 800; letter-spacing: 0.5px; }
 .header-right { display: flex; align-items: center; gap: 10px; }
 .badge { background: #e94560; color: white; font-size: 11px; padding: 3px 10px; border-radius: 12px; font-weight: 600; }
 .btn-logout { background: none; border: 1px solid rgba(255,255,255,0.3); color: #eee; font-size: 12px; padding: 5px 10px; border-radius: 8px; cursor: pointer; }
@@ -23,9 +23,9 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
 
 /* ── AUTH ── */
 .auth-wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 30px 24px; }
-.auth-logo { width: 180px; height: 180px; margin-bottom: 16px; animation: spin 3s linear infinite; filter: drop-shadow(0 8px 24px rgba(0,0,0,0.6)); }
+.auth-logo { width: 180px; height: 180px; margin-bottom: 16px; animation: spin 8s linear infinite; filter: drop-shadow(0 8px 24px rgba(0,0,0,0.6)); }
 @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
-.auth-title { font-size: 26px; font-weight: 800; margin-bottom: 4px; }
+.auth-title { font-size: 32px; font-weight: 800; margin-bottom: 4px; letter-spacing: 0.5px; }
 .auth-sub { color: #aaa; font-size: 14px; margin-bottom: 32px; }
 .auth-card { background: #0f3460; border-radius: 20px; padding: 28px 24px; width: 100%; max-width: 400px; }
 .auth-tabs { display: flex; gap: 8px; margin-bottom: 24px; }
@@ -134,38 +134,28 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
 <div class="screen active" id="screen-auth">
   <div class="auth-wrap">
     <svg class="auth-logo" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
-      <!-- Vinyl body -->
       <circle cx="100" cy="100" r="98" fill="#111"/>
-      <!-- Grooves -->
       <circle cx="100" cy="100" r="90" fill="none" stroke="#1a1a1a" stroke-width="1.5"/>
       <circle cx="100" cy="100" r="84" fill="none" stroke="#1a1a1a" stroke-width="1.5"/>
       <circle cx="100" cy="100" r="78" fill="none" stroke="#1a1a1a" stroke-width="1.5"/>
       <circle cx="100" cy="100" r="72" fill="none" stroke="#1a1a1a" stroke-width="1.5"/>
       <circle cx="100" cy="100" r="66" fill="none" stroke="#1a1a1a" stroke-width="1.5"/>
-      <!-- Label area -->
       <circle cx="100" cy="100" r="55" fill="#2a7a3a"/>
       <circle cx="100" cy="100" r="54" fill="none" stroke="#1e5c2a" stroke-width="1"/>
-      <!-- Label inner ring -->
       <circle cx="100" cy="100" r="45" fill="none" stroke="#1e5c2a" stroke-width="0.8" stroke-dasharray="4,3"/>
-      <!-- Label shine -->
       <ellipse cx="82" cy="72" rx="14" ry="8" fill="rgba(255,255,255,0.08)" transform="rotate(-30 82 72)"/>
-      <!-- Label text arc top: THE VINYL HUNTER -->
       <path id="arcTop" d="M 55,100 A 45,45 0 0,1 145,100" fill="none"/>
       <text font-size="8.5" font-family="Arial, sans-serif" font-weight="bold" fill="white" letter-spacing="2">
         <textPath href="#arcTop" startOffset="8%">THE VINYL HUNTER</textPath>
       </text>
-      <!-- Label text arc bottom -->
       <path id="arcBot" d="M 58,108 A 45,45 0 0,0 142,108" fill="none"/>
       <text font-size="6" font-family="Arial, sans-serif" fill="#c8e6c8" letter-spacing="1.5">
         <textPath href="#arcBot" startOffset="12%">CATALOGO VINILI</textPath>
       </text>
-      <!-- 45 RPM text -->
       <text x="100" y="97" text-anchor="middle" font-size="11" font-family="Arial" font-weight="bold" fill="white">45</text>
       <text x="100" y="108" text-anchor="middle" font-size="6" font-family="Arial" fill="#c8e6c8" letter-spacing="2">RPM</text>
-      <!-- Center hole -->
       <circle cx="100" cy="100" r="7" fill="#111"/>
       <circle cx="100" cy="100" r="3" fill="#222"/>
-      <!-- Outer edge shine -->
       <circle cx="100" cy="100" r="97" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="2"/>
     </svg>
     <div class="auth-title">Vinyl Hunter</div>
@@ -175,13 +165,11 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
         <button class="auth-tab active" onclick="switchTab('login')">Accedi</button>
         <button class="auth-tab" onclick="switchTab('register')">Registrati</button>
       </div>
-      <!-- LOGIN -->
       <div id="form-login">
         <div class="input-group"><label>Email</label><input type="email" id="login-email" placeholder="tua@email.com"></div>
         <div class="input-group"><label>Password</label><input type="password" id="login-password" placeholder="••••••••"></div>
         <button class="btn-main" onclick="doLogin()" id="btn-login">Accedi</button>
       </div>
-      <!-- REGISTER -->
       <div id="form-register" style="display:none">
         <div class="input-group"><label>Nome</label><input type="text" id="reg-nome" placeholder="Il tuo nome"></div>
         <div class="input-group"><label>Email</label><input type="email" id="reg-email" placeholder="tua@email.com"></div>
@@ -306,10 +294,8 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
 <div class="toast" id="toast"></div>
 
 <script>
-// ── State ────────────────────────────────────────────────
 let STATE = { token: null, userId: null, nome: null, vinyls: [] };
 
-// ── Init ─────────────────────────────────────────────────
 window.onload = () => {
   const saved = localStorage.getItem('vh_session');
   if (saved) {
@@ -321,7 +307,6 @@ window.onload = () => {
   }
 };
 
-// ── Auth ─────────────────────────────────────────────────
 function switchTab(tab) {
   document.querySelectorAll('.auth-tab').forEach((t,i) => t.classList.toggle('active', (tab==='login'&&i===0)||(tab==='register'&&i===1)));
   document.getElementById('form-login').style.display = tab === 'login' ? 'block' : 'none';
@@ -382,7 +367,6 @@ function showApp() {
   setNav('nav-home');
 }
 
-// ── Navigation ───────────────────────────────────────────
 function goTo(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
@@ -392,11 +376,9 @@ function setNav(id) {
   document.getElementById(id).classList.add('active');
 }
 
-// ── Scan ─────────────────────────────────────────────────
 async function handlePhoto(event) {
   const file = event.target.files[0];
   if (!file) return;
-  // Show preview
   const reader = new FileReader();
   reader.onload = e => {
     const img = document.getElementById('preview-img');
@@ -405,7 +387,6 @@ async function handlePhoto(event) {
     document.getElementById('camera-placeholder').style.display = 'none';
   };
   reader.readAsDataURL(file);
-  // Send to API
   document.getElementById('loading').style.display = 'block';
   document.getElementById('result-card').style.display = 'none';
   const form = new FormData();
@@ -457,7 +438,6 @@ function discardResult() {
   document.getElementById('camera-placeholder').style.display = 'block';
 }
 
-// ── Catalog ──────────────────────────────────────────────
 async function loadVinyls() {
   try {
     const r = await fetch(`/api/vinili/${STATE.userId}?token=${STATE.token}`);
@@ -515,7 +495,6 @@ function updateStats() {
   document.getElementById('badge-count').textContent = `${total} dischi`;
 }
 
-// ── Excel ────────────────────────────────────────────────
 async function importExcel(event) {
   const file = event.target.files[0];
   if (!file) return;
@@ -537,25 +516,42 @@ async function importExcel(event) {
 async function exportExcel() {
   showToast('⏳ Preparazione file…');
   try {
-    // Fetch il file come blob, poi usa un object URL - funziona su tutti i browser
-    const r = await fetch(`/api/export_excel/${STATE.userId}?token=${encodeURIComponent(STATE.token)}`);
+    const url = `/api/export_excel/${STATE.userId}?token=${encodeURIComponent(STATE.token)}`;
+    const r = await fetch(url);
     if (!r.ok) throw new Error('Errore export: ' + r.status);
-    const blob = await r.blob();
+
+    // Forza il tipo MIME corretto ignorando quello dichiarato dal server
+    const arrayBuffer = await r.arrayBuffer();
+    const blob = new Blob([arrayBuffer], {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    });
     const blobUrl = URL.createObjectURL(blob);
-    
-    // Su iOS Safari, window.open è l'unico modo affidabile
+
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    const isAndroid = /Android/.test(navigator.userAgent);
+
     if (isIOS) {
+      // iOS Safari: window.open è l'unico modo affidabile
       window.open(blobUrl, '_blank');
+    } else if (isAndroid) {
+      // Android: usa <a> con download e click sintetico via dispatchEvent
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = 'Catalogo_Vinili.xlsx';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+      setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(blobUrl); }, 5000);
     } else {
+      // PC (Chrome, Firefox, Edge)
       const a = document.createElement('a');
       a.href = blobUrl;
       a.download = 'Catalogo_Vinili.xlsx';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
     }
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
     showToast('📥 Download avviato!');
   } catch(e) { showToast(e.message, true); }
 }
@@ -580,7 +576,6 @@ async function deleteCatalog() {
     updateStats();
   } catch(e) { showToast(e.message, true); }
 }
-
 
 function showToast(msg, isError = false) {
   const t = document.getElementById('toast');
