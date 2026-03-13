@@ -386,7 +386,18 @@ async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = ""
         print(f"DISCOGS MATCH FINALE: {match.get('title')} | {match.get('format')} | {match.get('year')}")
 
         title_full = match.get("title", "")
-        # Non sovrascrivere mai artista e titolo originali
+        # Se artista o titolo sono vuoti, estraili sempre dal title_full di Discogs
+        disc_artista = artista
+        disc_titolo  = titolo
+        if " - " in title_full:
+            parts = title_full.split(" - ", 1)
+            if not disc_artista:
+                disc_artista = parts[0].strip()
+            if not disc_titolo:
+                disc_titolo = parts[1].strip()
+        elif not disc_artista and title_full:
+            disc_artista = title_full.strip()
+
         styles    = match.get("style", []) or match.get("genre", [])
         stile     = ", ".join(styles[:2]) if styles else data.get("stile", "")
         formats   = match.get("format", [])
@@ -414,16 +425,38 @@ async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = ""
             except Exception:
                 pass
 
-        # Stampa costosa e prezzo dal master
+        # Stampa costosa e prezzo: prova master, poi release diretta
         stampa_costosa = ""
         prezzo_max     = ""
-        master_id = match.get("master_id")
+        master_id  = match.get("master_id")
+        release_id = match.get("id")
         if master_id:
             stampa_costosa, prezzo_max = await cerca_prezzo_max_discogs(master_id)
+        # Fallback: se no master o prezzo non trovato, prova la release stessa
+        if not prezzo_max and release_id:
+            try:
+                async with httpx.AsyncClient(timeout=10) as pc:
+                    sr = await pc.get(
+                        f"https://api.discogs.com/marketplace/stats/{release_id}",
+                        headers=DISCOGS_HEADERS()
+                    )
+                    if sr.status_code == 200:
+                        stats = sr.json()
+                        lp = stats.get("lowest_price")
+                        if lp is not None:
+                            price = float(lp.get("value", 0) if isinstance(lp, dict) else lp or 0)
+                            if price > 0:
+                                prezzo_max = f"EUR {price:.2f}"
+                                # catno della release come stampa_costosa se non abbiamo già un master
+                                if not stampa_costosa:
+                                    stampa_costosa = stampa or match.get("catno", "")
+                                print(f"PREZZO FALLBACK release {release_id}: {prezzo_max}")
+            except Exception as e:
+                print(f"PREZZO FALLBACK ERROR: {e}")
 
         result = {
-            "artista":        artista,
-            "titolo":         titolo,
+            "artista":        disc_artista,
+            "titolo":         disc_titolo,
             "formato":        formato,
             "stile":          stile,
             "anno":           anno_out,
@@ -434,8 +467,12 @@ async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = ""
         }
         print(f"DISCOGS RESULT: {result}")
 
-        # Salva in cache
+        # Salva in cache (con artista/titolo da Discogs per lookup futuri)
         await cache_set(ck, result)
+        # Salva anche con chiave disc_artista|disc_titolo se diversa
+        ck2 = cache_key(disc_artista, disc_titolo)
+        if ck2 != ck and disc_artista:
+            await cache_set(ck2, result)
         return result
 
 
