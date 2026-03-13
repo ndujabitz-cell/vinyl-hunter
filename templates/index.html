@@ -284,6 +284,10 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
           <div class="field"><label>Cat. No.</label><input id="f-catno"></div>
         </div>
         <div class="field"><label>Stile / Genere</label><input id="f-stile"></div>
+        <div class="row2">
+          <div class="field"><label>Stampa + costosa</label><input id="f-stampa-costosa" readonly style="color:#e94560;font-weight:600;cursor:default;background:#0d1b2e;"></div>
+          <div class="field"><label>Prezzo medio</label><input id="f-prezzo-max" readonly style="color:#e94560;font-weight:600;cursor:default;background:#0d1b2e;"></div>
+        </div>
         <div class="action-btns">
           <button class="btn-confirm" onclick="confirmVinyl()">✅ Aggiungi</button>
           <button class="btn-discard" onclick="discardResult()">❌ Scarta</button>
@@ -447,6 +451,8 @@ async function handlePhoto(event) {
     document.getElementById('f-etichetta').value = data.etichetta || '';
     document.getElementById('f-catno').value = data.catno || '';
     document.getElementById('f-stile').value = data.stile || '';
+    document.getElementById('f-stampa-costosa').value = data.stampa_costosa || '';
+    document.getElementById('f-prezzo-max').value = data.prezzo_max || '';
     document.getElementById('result-card').style.display = 'block';
   } catch(e) { showToast(e.message, true); }
   document.getElementById('loading').style.display = 'none';
@@ -464,8 +470,8 @@ async function confirmVinyl() {
     etichetta: document.getElementById('f-etichetta').value,
     stampa: document.getElementById('f-catno').value,
     stile: document.getElementById('f-stile').value,
-    stampa_costosa: '',
-    prezzo_max: '',
+    stampa_costosa: document.getElementById('f-stampa-costosa').value,
+    prezzo_max: document.getElementById('f-prezzo-max').value,
   };
   if (!vinyl.artista) return showToast('Inserisci almeno l\'artista', true);
   try {
