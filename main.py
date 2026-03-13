@@ -206,6 +206,26 @@ def extract_barcode(s: str) -> str:
             return m
     return ""
 
+def fix_catno_ocr(s: str) -> str:
+    """Corregge errori OCR nei catno: O->0 e I->1 adiacenti a cifre."""
+    if not s:
+        return s
+    chars = list(s)
+    for i, c in enumerate(chars):
+        if c in ('O', 'o'):
+            pd = i > 0 and chars[i-1].isdigit()
+            nd = i < len(chars)-1 and chars[i+1].isdigit()
+            nb = any(chars[j].isdigit() for j in range(max(0,i-3), min(len(chars),i+4)))
+            sp = any(chars[j]==' ' for j in range(max(0,i-2), min(len(chars),i+3)))
+            if pd or nd or (nb and not sp):
+                chars[i] = '0'
+        elif c in ('I', 'l'):
+            pd = i > 0 and chars[i-1].isdigit()
+            nd = i < len(chars)-1 and chars[i+1].isdigit()
+            if pd or nd:
+                chars[i] = '1'
+    return ''.join(chars)
+
 def split_lati(titolo: str, fmt: str) -> tuple[str, str]:
     """
     Separa lato A e lato B solo per 7"/45rpm.
@@ -263,7 +283,7 @@ async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = ""
     fmt_raw   = (data.get("formato")   or "").strip()
     etichetta = (data.get("etichetta") or "").strip()
     anno      = (data.get("anno")      or "").strip()
-    catno     = (data.get("stampa")    or "").strip()
+    catno     = fix_catno_ocr((data.get("stampa") or "").strip())
 
     ck = cache_key(artista, titolo)
 
@@ -585,17 +605,13 @@ REGOLE FONDAMENTALI:
                     stampa_val = str(parsed.get("stampa", "")).strip()
                     if stampa_val.isdigit() and len(stampa_val) >= 10:
                         parsed["stampa"] = ""
-                    # Gemini confonde O (lettera) con 0 (zero) nei catno
-                    # Nella parte numerica del catno, O->0, I->1, l->1
-                    import re as _re2
+                    # Gemini confonde O->0 e I->1 nei catno (errore OCR)
                     sv = str(parsed.get("stampa", "") or "")
                     if sv:
-                        m = _re2.match(r'^([A-Za-z -]+)([A-Za-z0-9]+)$', sv)
-                        if m:
-                            fixed = m.group(1) + m.group(2).replace('O','0').replace('I','1').replace('l','1')
-                            if fixed != sv:
-                                print(f"CATNO NORMALIZED: {sv!r} -> {fixed!r}")
-                                parsed["stampa"] = fixed
+                        fixed = fix_catno_ocr(sv)
+                        if fixed != sv:
+                            print(f"CATNO NORMALIZED: {sv!r} -> {fixed!r}")
+                            parsed["stampa"] = fixed
                     gemini_data.update(parsed)
                 except Exception as pe:
                     print(f"JSON PARSE ERROR: {pe}")
