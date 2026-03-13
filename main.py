@@ -176,6 +176,22 @@ def formato_to_discogs(fmt: str) -> str:
     if "ep" in f:                          return "EP"
     return "Vinyl"
 
+def formati_alternativi_discogs(fmt_discogs: str) -> list[str]:
+    """
+    Restituisce i formati alternativi Discogs da provare se il primo fallisce.
+    Discogs registra i 7" come: '7"', '45 RPM', 'Single', 'Vinyl'.
+    Discogs registra i 12" come: '12"', 'Maxi-Single', 'Vinyl'.
+    """
+    if fmt_discogs == '7"':
+        return ["45 RPM", "Single", "Vinyl"]
+    if fmt_discogs == '12"':
+        return ["Maxi-Single", "Vinyl"]
+    if fmt_discogs == "LP":
+        return ["Vinyl"]
+    if fmt_discogs == "EP":
+        return ["Vinyl"]
+    return []
+
 def is_7inch(fmt: str) -> bool:
     f = fmt.lower()
     return "7" in f or "45" in f
@@ -295,6 +311,13 @@ async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = ""
             print("Tentativo 2: catno + formato")
             match = await _discogs_search(client, {"catno": catno, "format": fmt_discogs})
 
+        # 2b. catno + formati alternativi Discogs (es. 7" -> 45 RPM, Single, Vinyl)
+        if not match and catno and not catno.isdigit():
+            for fmt_alt in formati_alternativi_discogs(fmt_discogs):
+                print(f"Tentativo 2b: catno + formato alternativo '{fmt_alt}'")
+                match = await _discogs_search(client, {"catno": catno, "format": fmt_alt})
+                if match: break
+
         # 3. lato A + lato B + etichetta + formato (solo 7"/45rpm con split)
         if not match and ha_lati and etichetta:
             print("Tentativo 3: latoA + latoB + etichetta + formato")
@@ -318,6 +341,15 @@ async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = ""
             if etichetta: p["label"] = etichetta
             match = await _discogs_search(client, p)
 
+        # 5b. artista + titolo + formati alternativi (es. 45 RPM invece di 7")
+        if not match and artista and lato_a:
+            for fmt_alt in formati_alternativi_discogs(fmt_discogs):
+                print(f"Tentativo 5b: artista + titolo + formato alternativo '{fmt_alt}'")
+                p = {"artist": artista, "title": lato_a, "format": fmt_alt}
+                if etichetta: p["label"] = etichetta
+                match = await _discogs_search(client, p)
+                if match: break
+
         # 6. artista + titolo + etichetta + anno + formato
         if not match and artista and lato_a and anno:
             print("Tentativo 6: artista + titolo + etichetta + anno + formato")
@@ -330,6 +362,20 @@ async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = ""
             print("Tentativo 7: artista + titolo + formato (fallback)")
             match = await _discogs_search(client, {
                 "artist": artista, "title": lato_a, "format": fmt_discogs
+            })
+
+        # 7b. se artista vuoto ma etichetta presente: q=etichetta + titolo
+        if not match and not artista and etichetta and lato_a:
+            print("Tentativo 7b: etichetta + titolo (artista mancante)")
+            match = await _discogs_search(client, {
+                "q": f"{etichetta} {lato_a}", "format": fmt_discogs
+            })
+
+        # 7c. solo etichetta + formato (artista e titolo entrambi vuoti)
+        if not match and not artista and not lato_a and etichetta and catno:
+            print("Tentativo 7c: solo etichetta per lookup catno")
+            match = await _discogs_search(client, {
+                "label": etichetta, "catno": catno
             })
 
         if not match:
@@ -445,21 +491,25 @@ async def scan_label(file: UploadFile = File(...)):
             )
             prompt = """Analizza questa immagine di un'etichetta di disco vinile.
 Estrai le informazioni visibili e rispondi SOLO con JSON valido senza markdown:
-{"artista":"","titolo":"","formato":"","stile":"","anno":"","etichetta":"","stampa":"","barcode":""}
+{"artista":"","titolo":"","formato":"","stile":"","anno":"","etichetta":"","stampa":"","barcode":"","lato":""}
 
 REGOLE FONDAMENTALI:
-- "stampa" = numero di catalogo (catalog number). Esempi validi: CBS 1234, HS-032, ATL-50234, 2C 006-93752, CLMN-126.
-  Il catalog number e' stampato vicino al logo dell'etichetta, sul bordo, o inciso nella plastica.
-  NON e' il codice a barre EAN/barcode (sequenza numerica lunga tipo 3700426913386).
-  NON e' il numero ISRC. Se non trovi un catalog number chiaro, lascia "stampa" vuoto.
-- "artista" = nome dell'artista o band principale
-- "titolo" = titolo del brano/album. Se ci sono Side A / Side B usa il titolo del Side A
-- "formato" = 7", 10", 12", LP, EP, 45rpm, 33rpm
-- "stile" = genere musicale. Se non visibile deducilo dall'etichetta (Blue Note=Jazz, Motown=Soul)
-- "anno" = anno a 4 cifre. NON confondere con numeri di catalogo
-- "etichetta" = nome etichetta discografica
-- Lascia vuoto qualsiasi campo non chiaramente visibile. NON inventare.
-- "barcode" = codice a barre EAN/UPC numerico (8, 12 o 13 cifre) stampato sotto il barcode grafico. NON confonderlo col catalog number."""
+- "stampa" = numero di catalogo (catalog number). Esempi: CBS 1234, HS-032, MAF008, CLMN-126.
+  Si trova vicino al logo etichetta, sul bordo, o inciso nella plastica.
+  NON e' il codice EAN/barcode numerico lungo. NON e' il numero ISRC.
+  Se non trovi un catalog number chiaro, lascia "stampa" vuoto.
+- "artista" = nome dell'artista o band principale. Se e' il lato B e non e' visibile, lascia vuoto.
+- "titolo" = titolo del brano/album.
+  Se e' il LATO A: usa il titolo del lato A.
+  Se e' il LATO B: metti il titolo del lato B nel campo titolo.
+  Se entrambi i lati sono visibili: usa formato "Titolo A / Titolo B".
+- "lato" = "A" se e' chiaramente il lato A, "B" se e' il lato B, "" se non visibile o irrilevante (LP).
+- "formato" = 7", 10", 12", LP, EP, 45rpm, 33rpm. Per i 7" il formato e' quasi sempre 7".
+- "stile" = genere musicale. Se non visibile deducilo dall'etichetta (Blue Note=Jazz, Motown=Soul).
+- "anno" = anno a 4 cifre. NON confondere con numeri di catalogo.
+- "etichetta" = nome etichetta discografica.
+- "barcode" = sequenza numerica EAN/UPC di 8, 12 o 13 cifre sotto il barcode grafico.
+- Lascia vuoto qualsiasi campo non chiaramente visibile. NON inventare."""
             payload = {"contents": [{"parts": [
                 {"text": prompt},
                 {"inline_data": {"mime_type": mime, "data": b64}}
@@ -480,16 +530,32 @@ REGOLE FONDAMENTALI:
         except Exception as e:
             print(f"GEMINI EXCEPTION: {e}")
 
-    # Estrai barcode da Gemini (non viene salvato nel DB)
+    # Estrai barcode (non salvato nel DB)
     barcode_scan = extract_barcode(str(gemini_data.pop("barcode", "") or ""))
-    if not barcode_scan:
-        # Prova anche dal campo stampa (a volte Gemini mette il barcode lì)
-        bc_from_stampa = extract_barcode(str(gemini_data.get("stampa", "") or ""))
-        if bc_from_stampa:
-            barcode_scan = bc_from_stampa
-            gemini_data["stampa"] = ""  # era un barcode, svuota stampa
-    print(f"BARCODE SCAN: {barcode_scan!r}")
+    lato_scan = str(gemini_data.pop("lato", "") or "").strip().upper()
+
+    # Se stampa sembra un barcode, spostalo
+    bc_from_stampa = extract_barcode(str(gemini_data.get("stampa", "") or ""))
+    if bc_from_stampa and not barcode_scan:
+        barcode_scan = bc_from_stampa
+        gemini_data["stampa"] = ""
+
+    print(f"BARCODE SCAN: {barcode_scan!r} LATO: {lato_scan!r}")
+
+    # Se e' lato B senza artista: il titolo lato B va messo come lato B nella ricerca
+    # Discogs cercherà il 7" per catno/etichetta, non per titolo lato B
+    # Il titolo viene tenuto come lato B ma non viene sovrascritto l'artista
+    if lato_scan == "B" and not gemini_data.get("artista"):
+        # Sposta titolo lato B in un campo temporaneo, la ricerca userà catno/etichetta
+        gemini_data["_titolo_lato_b"] = gemini_data.get("titolo", "")
+        gemini_data["titolo"] = ""  # titolo lato B da solo non è utile per la ricerca principale
+
     result = await cerca_su_discogs(gemini_data, use_cache=True, barcode=barcode_scan)
+
+    # Se la ricerca ha trovato qualcosa ma artista/titolo sono vuoti
+    # e avevamo un titolo lato B, non sovrascriverlo
+    if lato_scan == "B" and not result.get("artista") and gemini_data.get("_titolo_lato_b"):
+        result["titolo"] = gemini_data["_titolo_lato_b"]
     result["catno"] = result.get("stampa", "")
     return result
 
