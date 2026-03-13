@@ -287,8 +287,19 @@ async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = ""
     lato_a, lato_b = split_lati(titolo, fmt_raw)
     ha_lati = bool(lato_b)  # True solo se 7"/45rpm con split trovato
 
+    # Normalizza catno: prova sia con che senza spazi (es. MAF008 e MAF 008)
+    catno_variants = [catno]
+    if catno and ' ' not in catno and len(catno) > 3:
+        # Prova a inserire uno spazio prima degli ultimi 3 digit (es. MAF008 -> MAF 008)
+        import re as _re
+        m = _re.match(r'^([A-Za-z-]+)(\d+)$', catno)
+        if m:
+            catno_variants.append(f"{m.group(1)} {m.group(2)}")
+    elif catno and ' ' in catno:
+        catno_variants.append(catno.replace(' ', ''))
+
     print(f"DISCOGS CERCA: artista={artista!r} lato_a={lato_a!r} lato_b={lato_b!r} "
-          f"fmt={fmt_discogs!r} etichetta={etichetta!r} anno={anno!r} catno={catno!r}")
+          f"fmt={fmt_discogs!r} etichetta={etichetta!r} anno={anno!r} catno={catno!r} variants={catno_variants!r}")
 
     match = None
     async with httpx.AsyncClient(timeout=15) as client:
@@ -299,23 +310,29 @@ async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = ""
             match = await _discogs_search(client, {"barcode": barcode})
             if match: print(f"MATCH via barcode!")
 
-        # 1. catno + etichetta + formato specifico
+        # 1. catno + etichetta + formato — prova tutte le varianti del catno
         if not match and catno and not catno.isdigit():
-            print("Tentativo 1: catno + etichetta + formato")
-            p = {"catno": catno, "format": fmt_discogs}
-            if etichetta: p["label"] = etichetta
-            match = await _discogs_search(client, p)
+            for cv in catno_variants:
+                print(f"Tentativo 1: catno={cv!r} + etichetta + formato")
+                p = {"catno": cv, "format": fmt_discogs}
+                if etichetta: p["label"] = etichetta
+                match = await _discogs_search(client, p)
+                if match: break
 
         # 2. catno + formato (senza etichetta)
         if not match and catno and not catno.isdigit():
-            print("Tentativo 2: catno + formato")
-            match = await _discogs_search(client, {"catno": catno, "format": fmt_discogs})
+            for cv in catno_variants:
+                print(f"Tentativo 2: catno={cv!r} + formato")
+                match = await _discogs_search(client, {"catno": cv, "format": fmt_discogs})
+                if match: break
 
         # 2b. catno + formati alternativi Discogs (es. 7" -> 45 RPM, Single, Vinyl)
         if not match and catno and not catno.isdigit():
-            for fmt_alt in formati_alternativi_discogs(fmt_discogs):
-                print(f"Tentativo 2b: catno + formato alternativo '{fmt_alt}'")
-                match = await _discogs_search(client, {"catno": catno, "format": fmt_alt})
+            for cv in catno_variants:
+                for fmt_alt in formati_alternativi_discogs(fmt_discogs):
+                    print(f"Tentativo 2b: catno={cv!r} + formato alternativo '{fmt_alt}'")
+                    match = await _discogs_search(client, {"catno": cv, "format": fmt_alt})
+                    if match: break
                 if match: break
 
         # 3. lato A + lato B + etichetta + formato (solo 7"/45rpm con split)
@@ -371,12 +388,19 @@ async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = ""
                 "q": f"{etichetta} {lato_a}", "format": fmt_discogs
             })
 
-        # 7c. solo etichetta + formato (artista e titolo entrambi vuoti)
+        # 7c. solo etichetta + catno (artista e titolo entrambi vuoti), tutte le varianti
         if not match and not artista and not lato_a and etichetta and catno:
-            print("Tentativo 7c: solo etichetta per lookup catno")
-            match = await _discogs_search(client, {
-                "label": etichetta, "catno": catno
-            })
+            for cv in catno_variants:
+                print(f"Tentativo 7c: etichetta={etichetta!r} + catno={cv!r}")
+                match = await _discogs_search(client, {"label": etichetta, "catno": cv})
+                if match: break
+
+        # 7d. solo catno senza etichetta (ultimo tentativo se abbiamo solo catno)
+        if not match and not artista and not lato_a and catno:
+            for cv in catno_variants:
+                print(f"Tentativo 7d: solo catno={cv!r} senza altri filtri")
+                match = await _discogs_search(client, {"catno": cv})
+                if match: break
 
         if not match:
             print("DISCOGS: nessun match trovato")
