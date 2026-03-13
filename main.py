@@ -585,6 +585,17 @@ REGOLE FONDAMENTALI:
                     stampa_val = str(parsed.get("stampa", "")).strip()
                     if stampa_val.isdigit() and len(stampa_val) >= 10:
                         parsed["stampa"] = ""
+                    # Gemini confonde O (lettera) con 0 (zero) nei catno
+                    # Nella parte numerica del catno, O->0, I->1, l->1
+                    import re as _re2
+                    sv = str(parsed.get("stampa", "") or "")
+                    if sv:
+                        m = _re2.match(r'^([A-Za-z -]+)([A-Za-z0-9]+)$', sv)
+                        if m:
+                            fixed = m.group(1) + m.group(2).replace('O','0').replace('I','1').replace('l','1')
+                            if fixed != sv:
+                                print(f"CATNO NORMALIZED: {sv!r} -> {fixed!r}")
+                                parsed["stampa"] = fixed
                     gemini_data.update(parsed)
                 except Exception as pe:
                     print(f"JSON PARSE ERROR: {pe}")
