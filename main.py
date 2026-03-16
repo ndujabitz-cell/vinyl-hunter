@@ -133,10 +133,14 @@ async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
                 if not release_id:
                     continue
 
+                await asyncio.sleep(0.5)  # evita rate limit sulle stats
                 stats_r = await client.get(
                     f"https://api.discogs.com/marketplace/stats/{release_id}",
                     headers=DISCOGS_HEADERS()
                 )
+                if stats_r.status_code == 429:
+                    print("RATE LIMIT su marketplace stats - skip versione")
+                    continue
                 if stats_r.status_code != 200:
                     continue
 
@@ -251,8 +255,17 @@ async def _discogs_search(client, params: dict) -> dict | None:
             params=params
         )
         if r.status_code == 429:
-            print("DISCOGS RATE LIMIT")
-            return None
+            print("DISCOGS RATE LIMIT - attendo 10 secondi")
+            await asyncio.sleep(10)
+            # Riprova una volta dopo il backoff
+            r = await client.get(
+                "https://api.discogs.com/database/search",
+                headers=DISCOGS_HEADERS(),
+                params=params
+            )
+            if r.status_code == 429:
+                print("DISCOGS RATE LIMIT - skip")
+                return None
         if r.status_code != 200:
             return None
         results = r.json().get("results", [])
@@ -755,11 +768,15 @@ async def import_excel(
                 # Manda progresso al frontend
                 yield f"data: {json.dumps({'done': False, 'current': idx+1, 'total': total, 'artista': artista}, ensure_ascii=False)}\n\n"
 
-                # Arricchisci solo se mancano campi (mai artista/titolo)
-                needs_enrich = not all([stampa, etichetta, stile, anno, stampa_costosa, prezzo_max])
+                # Arricchisci solo se mancano campi fondamentali
+                # Se ha già artista+titolo+formato, cerca solo stampa/prezzo se manca catno
+                campi_base_ok = bool(artista and titolo and formato)
+                needs_full_enrich = not campi_base_ok  # mancano dati base
+                needs_price_only = campi_base_ok and not all([stampa_costosa, prezzo_max])
+                needs_enrich = needs_full_enrich or needs_price_only
 
                 if needs_enrich and DISCOGS_TOKEN:
-                    await asyncio.sleep(1.1)  # anti rate-limit Discogs (max 60 req/min)
+                    await asyncio.sleep(2.0)  # anti rate-limit Discogs (max 60 req/min)
                     try:
                         enriched = await cerca_su_discogs({
                             "artista": artista, "titolo": titolo,
@@ -909,6 +926,102 @@ async def _build_excel_response(user_id: str, token: str):
             "Cache-Control": "no-cache, no-store, must-revalidate",
         }
     )
+
+@app.post("/api/enrich_batch")
+async def enrich_batch(user_id: str = Form(...), token: str = Form(...), offset: int = Form(default=0), batch_size: int = Form(default=30)):
+    """
+    Arricchisce i dischi già nel DB con i dati Discogs mancanti.
+    Elabora batch_size dischi a partire da offset.
+    Restituisce SSE con progresso e offset del prossimo batch.
+    """
+    # Recupera i dischi dell'utente che mancano di dati
+    async with httpx.AsyncClient(timeout=15) as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/vinili?user_id=eq.{user_id}&order=id.asc&limit={batch_size}&offset={offset}",
+            headers=supa_headers(token)
+        )
+    if r.status_code != 200:
+        raise HTTPException(400, "Errore recupero dati")
+
+    vinili = r.json()
+    total_batch = len(vinili)
+
+    async def generate():
+        enriched_count = 0
+        for idx, v in enumerate(vinili):
+            vid         = v.get("id")
+            artista     = v.get("artista", "") or ""
+            titolo      = v.get("titolo", "") or ""
+            formato     = v.get("formato", "") or ""
+            stile       = v.get("stile", "") or ""
+            anno        = v.get("anno", "") or ""
+            etichetta   = v.get("etichetta", "") or ""
+            stampa      = v.get("stampa", "") or ""
+            sc          = v.get("stampa_costosa", "") or ""
+            pm          = v.get("prezzo_max", "") or ""
+
+            # Salta se ha già tutti i campi
+            if all([stile, anno, etichetta, stampa, sc, pm]):
+                yield f"data: {json.dumps({'done': False, 'current': idx+1, 'total': total_batch, 'artista': artista, 'skipped': True}, ensure_ascii=False)}\n\n"
+                continue
+
+            yield f"data: {json.dumps({'done': False, 'current': idx+1, 'total': total_batch, 'artista': artista, 'skipped': False}, ensure_ascii=False)}\n\n"
+
+            await asyncio.sleep(2.0)  # anti rate-limit
+
+            try:
+                enriched = await cerca_su_discogs({
+                    "artista": artista, "titolo": titolo,
+                    "formato": formato, "stile": stile,
+                    "anno": anno, "etichetta": etichetta,
+                    "stampa": stampa,
+                    "stampa_costosa": sc,
+                    "prezzo_max": pm,
+                }, use_cache=True)
+
+                # Aggiorna solo i campi vuoti
+                update = {}
+                if not stile    and enriched.get("stile"):          update["stile"]          = enriched["stile"]
+                if not anno     and enriched.get("anno"):           update["anno"]           = enriched["anno"]
+                if not etichetta and enriched.get("etichetta"):     update["etichetta"]      = enriched["etichetta"]
+                if not stampa   and enriched.get("stampa"):         update["stampa"]         = enriched["stampa"]
+                if not sc       and enriched.get("stampa_costosa"): update["stampa_costosa"] = enriched["stampa_costosa"]
+                if not pm       and enriched.get("prezzo_max"):     update["prezzo_max"]     = enriched["prezzo_max"]
+                # Aggiorna artista/titolo solo se erano vuoti
+                if not artista  and enriched.get("artista"):        update["artista"]        = enriched["artista"]
+                if not titolo   and enriched.get("titolo"):         update["titolo"]         = enriched["titolo"]
+                if not formato  and enriched.get("formato"):        update["formato"]        = enriched["formato"]
+
+                if update:
+                    async with httpx.AsyncClient(timeout=10) as upd:
+                        await upd.patch(
+                            f"{SUPABASE_URL}/rest/v1/vinili?id=eq.{vid}",
+                            headers={**supa_headers(token), "Prefer": "return=minimal"},
+                            json=update
+                        )
+                    enriched_count += 1
+            except Exception as e:
+                print(f"ENRICH BATCH ERROR id={vid}: {e}")
+
+        next_offset = offset + total_batch
+        yield f"data: {json.dumps({'done': True, 'enriched': enriched_count, 'total': total_batch, 'next_offset': next_offset, 'has_more': total_batch == batch_size})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
+
+@app.get("/api/count/{user_id}")
+async def count_vinyls(user_id: str, token: str):
+    """Restituisce il totale dei dischi dell'utente."""
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/vinili?user_id=eq.{user_id}&select=id",
+            headers={**supa_headers(token), "Prefer": "count=exact", "Range": "0-0"}
+        )
+    total = int(r.headers.get("content-range", "0/0").split("/")[-1] or 0)
+    return {"total": total}
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
