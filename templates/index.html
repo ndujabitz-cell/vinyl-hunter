@@ -567,53 +567,54 @@ function updateStats() {
 async function importExcel(event) {
   const file = event.target.files[0];
   if (!file) return;
-  const form = new FormData();
-  form.append('file', file);
-  form.append('user_id', STATE.userId);
-  form.append('token', STATE.token);
 
-  // Mostra modal progresso
-  document.getElementById('modal-import-progress').style.display = 'flex';
-  document.getElementById('import-progress-bar').style.width = '0%';
-  document.getElementById('import-progress-text').textContent = 'Avvio...';
-  document.getElementById('import-progress-count').textContent = '0 / ?';
+  const progressBox  = document.getElementById('modal-import-progress');
+  const progressText = document.getElementById('import-progress-text');
+  const progressBar  = document.getElementById('import-progress-bar');
+  const progressCount = document.getElementById('import-progress-count');
+  progressBox.style.display = 'flex';
+  progressText.textContent = 'Lettura file Excel...';
+  progressBar.style.width = '0%';
+  progressCount.textContent = '';
 
   try {
-    const r = await fetch('/api/import_excel', { method: 'POST', body: form });
-    if (!r.ok) throw new Error('Errore server: ' + r.status);
+    // Step 1: parse Excel sul server (veloce)
+    const parseForm = new FormData();
+    parseForm.append('file', file);
+    parseForm.append('user_id', STATE.userId);
+    parseForm.append('token', STATE.token);
+    const parseResp = await fetch('/api/parse_excel', { method: 'POST', body: parseForm });
+    if (!parseResp.ok) throw new Error('Errore lettura Excel');
+    const { rows, total } = await parseResp.json();
 
-    const reader = r.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
+    progressText.textContent = 'Salvataggio in corso...';
+    progressCount.textContent = '0 / ' + total;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop(); // tieni l'ultima riga incompleta
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        try {
-          const msg = JSON.parse(line.slice(6));
-          if (msg.done) {
-            document.getElementById('modal-import-progress').style.display = 'none';
-            showToast('✅ Importati ' + msg.imported + ' dischi con dati Discogs!');
-            loadVinyls();
-          } else {
-            const pct = Math.round((msg.current / msg.total) * 100);
-            document.getElementById('import-progress-bar').style.width = pct + '%';
-            document.getElementById('import-progress-text').textContent =
-              msg.artista ? msg.artista : 'Elaborazione...';
-            document.getElementById('import-progress-count').textContent =
-              msg.current + ' / ' + msg.total + ' dischi';
-          }
-        } catch(e) { /* skip malformed line */ }
+    // Step 2: salva a blocchi di 50 dal frontend (niente timeout SSE)
+    const BATCH = 50;
+    let saved = 0;
+    for (let i = 0; i < rows.length; i += BATCH) {
+      const chunk = rows.slice(i, i + BATCH);
+      const batchForm = new FormData();
+      batchForm.append('user_id', STATE.userId);
+      batchForm.append('token', STATE.token);
+      batchForm.append('rows_json', JSON.stringify(chunk));
+      const batchResp = await fetch('/api/import_batch', { method: 'POST', body: batchForm });
+      if (batchResp.ok) {
+        const bd = await batchResp.json();
+        saved += bd.saved || 0;
       }
+      const pct = Math.round(((i + chunk.length) / total) * 100);
+      progressBar.style.width = pct + '%';
+      progressCount.textContent = (i + chunk.length) + ' / ' + total + ' dischi';
+      progressText.textContent = 'Salvataggio in corso...';
     }
+
+    progressBox.style.display = 'none';
+    showToast('✅ Importati ' + saved + ' dischi su ' + total + '!');
+    loadVinyls();
   } catch(e) {
-    document.getElementById('modal-import-progress').style.display = 'none';
+    progressBox.style.display = 'none';
     showToast(e.message || 'Errore importazione', true);
   }
   event.target.value = '';
