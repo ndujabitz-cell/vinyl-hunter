@@ -124,6 +124,9 @@ async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
             versions = r.json().get("versions", [])
             print(f"DISCOGS VERSIONS: {len(versions)} for master {master_id}")
 
+            # Limita a max 15 versioni per evitare rate limit
+            versions = versions[:15]
+
             best_price = 0.0
             best_catno = ""
 
@@ -133,7 +136,7 @@ async def cerca_prezzo_max_discogs(master_id: int) -> tuple[str, str]:
                 if not release_id:
                     continue
 
-                await asyncio.sleep(0.5)  # evita rate limit sulle stats
+                await asyncio.sleep(1.5)  # evita rate limit sulle stats
                 stats_r = await client.get(
                     f"https://api.discogs.com/marketplace/stats/{release_id}",
                     headers=DISCOGS_HEADERS()
@@ -716,6 +719,81 @@ async def delete_catalog(user_id: str, token: str):
 
 # ── Import Excel con SSE progress + arricchimento + cache ─────────────────────
 
+@app.post("/api/parse_excel")
+async def parse_excel(
+    user_id: str = Form(...),
+    token: str = Form(...),
+    file: UploadFile = File(...)
+):
+    """Legge l'Excel e restituisce tutte le righe come JSON. Nessun salvataggio."""
+    content_bytes = await file.read()
+    wb = load_workbook(io.BytesIO(content_bytes))
+    ws = wb.active
+    SKIP = {
+        '7"', '10"', '12"', '4"', 'lp', '2xlp', '2x lp', 'ep',
+        'single', 'riepilogo formati', 'totale vinili', 'artista'
+    }
+    rows_out = []
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if not row or not row[0]:
+            continue
+        artista = str(row[0] or "").strip()
+        if artista.lower() in SKIP:
+            continue
+        if len(artista) <= 5 and len(row) > 1 and str(row[1] or "").strip().isdigit():
+            continue
+        barcode_raw = str(row[9] or "").strip() if len(row) > 9 else ""
+        stampa_raw  = str(row[6] or "").strip()
+        if stampa_raw and stampa_raw.isdigit() and len(stampa_raw) >= 8:
+            barcode_raw = barcode_raw or stampa_raw
+            stampa_raw  = ""
+        rows_out.append({
+            "artista":        str(row[0] or "").strip(),
+            "titolo":         str(row[1] or "").strip(),
+            "formato":        str(row[2] or "").strip(),
+            "stile":          str(row[3] or "").strip(),
+            "anno":           str(row[4] or "").strip(),
+            "etichetta":      str(row[5] or "").strip(),
+            "stampa":         stampa_raw,
+            "stampa_costosa": str(row[7] or "").strip() if len(row) > 7 else "",
+            "prezzo_max":     str(row[8] or "").strip() if len(row) > 8 else "",
+        })
+    return {"rows": rows_out, "total": len(rows_out)}
+
+@app.post("/api/import_batch")
+async def import_batch(
+    user_id: str = Form(...),
+    token: str = Form(...),
+    rows_json: str = Form(...)
+):
+    """Salva un batch di righe nel DB. Chiamata multipla dal frontend."""
+    rows = json.loads(rows_json)
+    saved = 0
+    async with httpx.AsyncClient(timeout=30) as client:
+        for v in rows:
+            try:
+                r = await client.post(
+                    f"{SUPABASE_URL}/rest/v1/vinili",
+                    headers=supa_headers(token),
+                    json={
+                        "user_id":        user_id,
+                        "artista":        v.get("artista", ""),
+                        "titolo":         v.get("titolo", ""),
+                        "formato":        v.get("formato", ""),
+                        "stile":          v.get("stile", ""),
+                        "anno":           v.get("anno", ""),
+                        "etichetta":      v.get("etichetta", ""),
+                        "stampa":         v.get("stampa", ""),
+                        "stampa_costosa": v.get("stampa_costosa", ""),
+                        "prezzo_max":     v.get("prezzo_max", ""),
+                    }
+                )
+                if r.status_code in (200, 201):
+                    saved += 1
+            except Exception as e:
+                print(f"IMPORT BATCH ERROR: {e}")
+    return {"saved": saved}
+
 @app.post("/api/import_excel")
 async def import_excel(
     user_id: str = Form(...),
@@ -768,35 +846,8 @@ async def import_excel(
                 # Manda progresso al frontend
                 yield f"data: {json.dumps({'done': False, 'current': idx+1, 'total': total, 'artista': artista}, ensure_ascii=False)}\n\n"
 
-                # Arricchisci solo se mancano campi fondamentali
-                # Se ha già artista+titolo+formato, cerca solo stampa/prezzo se manca catno
-                campi_base_ok = bool(artista and titolo and formato)
-                needs_full_enrich = not campi_base_ok  # mancano dati base
-                needs_price_only = campi_base_ok and not all([stampa_costosa, prezzo_max])
-                needs_enrich = needs_full_enrich or needs_price_only
-
-                if needs_enrich and DISCOGS_TOKEN:
-                    await asyncio.sleep(2.0)  # anti rate-limit Discogs (max 60 req/min)
-                    try:
-                        enriched = await cerca_su_discogs({
-                            "artista": artista, "titolo": titolo,
-                            "formato": formato, "stile": stile,
-                            "anno": anno, "etichetta": etichetta,
-                            "stampa": stampa,
-                            "stampa_costosa": stampa_costosa,
-                            "prezzo_max": prezzo_max,
-                        }, use_cache=True, barcode=barcode_xl)
-                        # Aggiorna solo campi vuoti, mai artista/titolo
-                        if not formato:        formato        = enriched.get("formato", "")
-                        if not stile:          stile          = enriched.get("stile", "")
-                        if not anno:           anno           = enriched.get("anno", "")
-                        if not etichetta:      etichetta      = enriched.get("etichetta", "")
-                        if not stampa:         stampa         = enriched.get("stampa", "")
-                        if not stampa_costosa: stampa_costosa = enriched.get("stampa_costosa", "")
-                        if not prezzo_max:     prezzo_max     = enriched.get("prezzo_max", "")
-                    except Exception as e:
-                        print(f"ENRICH ERROR row {idx}: {e}")
-
+                # Import veloce: nessun arricchimento Discogs qui
+                # Usa il bottone "Arricchisci catalogo" nella Home dopo l'import
                 try:
                     await client.post(
                         f"{SUPABASE_URL}/rest/v1/vinili",
