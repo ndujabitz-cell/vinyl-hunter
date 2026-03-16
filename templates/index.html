@@ -117,6 +117,15 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
 .toast { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%); background: #0f9b58; color: white; padding: 10px 22px; border-radius: 20px; font-size: 13px; font-weight: 600; z-index: 999; opacity: 0; transition: opacity 0.3s; white-space: nowrap; pointer-events: none; }
 .toast.show { opacity: 1; }
 .toast.error { background: #e94560; }
+/* ENRICH PANEL */
+.enrich-panel { background: #0f3460; border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+.enrich-panel h4 { font-size: 13px; font-weight: 700; margin-bottom: 6px; color: #00d4aa; }
+.enrich-panel p { font-size: 12px; color: #aaa; margin-bottom: 12px; }
+.enrich-progress { background: #16213e; border-radius: 8px; height: 10px; overflow: hidden; margin-bottom: 8px; display: none; }
+.enrich-bar { height: 100%; background: linear-gradient(90deg, #533483, #00d4aa); border-radius: 8px; transition: width 0.3s; width: 0%; }
+.enrich-status { font-size: 11px; color: #aaa; min-height: 16px; margin-bottom: 10px; }
+.btn-enrich { background: linear-gradient(135deg, #533483, #00d4aa); border: none; border-radius: 10px; color: white; font-size: 13px; font-weight: 600; padding: 11px 20px; cursor: pointer; width: 100%; }
+.btn-enrich:disabled { opacity: 0.5; cursor: not-allowed; }
 /* DETAIL MODAL */
 .detail-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:300;display:flex;align-items:flex-end;justify-content:center;}
 .detail-sheet{background:#0f3460;border-radius:20px 20px 0 0;padding:24px 20px 40px;width:100%;max-width:500px;max-height:85vh;overflow-y:auto;}
@@ -209,6 +218,14 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
       <div class="stat-card"><div class="stat-val" id="stat-total">0</div><div class="stat-lab">Totale</div></div>
       <div class="stat-card"><div class="stat-val" style="color:#00d4aa" id="stat-lp">0</div><div class="stat-lab">LP</div></div>
       <div class="stat-card"><div class="stat-val" style="color:#533483" id="stat-7">0</div><div class="stat-lab">Singoli</div></div>
+    </div>
+    <p class="section-label">Arricchimento catalogo</p>
+    <div class="enrich-panel" id="enrich-panel">
+      <h4>🔍 Completa dati mancanti</h4>
+      <p>Cerca su Discogs stile, anno, etichetta, catno, stampa costosa e prezzo per i dischi che li hanno vuoti.</p>
+      <div class="enrich-progress" id="enrich-progress"><div class="enrich-bar" id="enrich-bar"></div></div>
+      <div class="enrich-status" id="enrich-status"></div>
+      <button class="btn-enrich" id="btn-enrich" onclick="startEnrich()">🔍 Avvia arricchimento</button>
     </div>
     <p class="section-label">Aggiungi dischi</p>
     <button class="btn-action bg-purple" onclick="goTo('screen-scan'); setNav('nav-scan')">
@@ -650,6 +667,98 @@ async function deleteCatalog() {
   } catch(e) { showToast(e.message, true); }
 }
 
+
+
+// ── ENRICH BATCH ────────────────────────────────────────────────────────────
+let enrichRunning = false;
+let enrichOffset  = 0;
+let enrichTotal   = 0;
+let enrichDone    = 0;
+
+async function startEnrich() {
+  if (enrichRunning) return;
+  if (!STATE.userId || !STATE.token) return showToast('Devi essere loggato', true);
+  // Recupera totale dischi
+  try {
+    const cr = await fetch('/api/count/' + STATE.userId + '?token=' + encodeURIComponent(STATE.token));
+    const cd = await cr.json();
+    enrichTotal = cd.total || 0;
+  } catch(e) { enrichTotal = 0; }
+
+  enrichRunning = true;
+  enrichOffset  = 0;
+  enrichDone    = 0;
+  document.getElementById('enrich-progress').style.display = 'block';
+  document.getElementById('btn-enrich').disabled = true;
+  document.getElementById('btn-enrich').textContent = '⏳ In corso...';
+  await runEnrichBatch();
+}
+
+async function runEnrichBatch() {
+  if (!enrichRunning) return;
+  const form = new FormData();
+  form.append('user_id', STATE.userId);
+  form.append('token', STATE.token);
+  form.append('offset', enrichOffset);
+  form.append('batch_size', 30);
+
+  try {
+    const r = await fetch('/api/enrich_batch', { method: 'POST', body: form });
+    if (!r.ok) throw new Error('Errore server: ' + r.status);
+
+    const reader = r.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        try {
+          const msg = JSON.parse(line.slice(6));
+          if (msg.done) {
+            enrichDone += msg.enriched || 0;
+            enrichOffset += msg.total || 0;
+            const pct = enrichTotal > 0 ? Math.round((enrichOffset / enrichTotal) * 100) : 100;
+            document.getElementById('enrich-bar').style.width = pct + '%';
+            if (msg.has_more) {
+              document.getElementById('enrich-status').textContent =
+                enrichOffset + '/' + enrichTotal + ' elaborati, ' + enrichDone + ' aggiornati — continuo...';
+              // Pausa 3 secondi tra i batch per non sovraccaricare
+              await new Promise(res => setTimeout(res, 3000));
+              await runEnrichBatch();
+            } else {
+              enrichRunning = false;
+              document.getElementById('enrich-bar').style.width = '100%';
+              document.getElementById('enrich-status').textContent =
+                '✅ Completato! ' + enrichDone + ' dischi aggiornati su ' + enrichTotal;
+              document.getElementById('btn-enrich').disabled = false;
+              document.getElementById('btn-enrich').textContent = '🔍 Avvia arricchimento';
+              showToast('✅ Arricchimento completato: ' + enrichDone + ' dischi aggiornati!');
+              loadVinyls();
+            }
+          } else {
+            const pct = enrichTotal > 0 ? Math.round(((enrichOffset + msg.current) / enrichTotal) * 100) : 0;
+            document.getElementById('enrich-bar').style.width = pct + '%';
+            const skip = msg.skipped ? ' (già completo)' : '';
+            document.getElementById('enrich-status').textContent =
+              (enrichOffset + msg.current) + '/' + enrichTotal + ' — ' + (msg.artista || '') + skip;
+          }
+        } catch(e) {}
+      }
+    }
+  } catch(e) {
+    enrichRunning = false;
+    document.getElementById('btn-enrich').disabled = false;
+    document.getElementById('btn-enrich').textContent = '🔍 Riprendi arricchimento';
+    document.getElementById('enrich-status').textContent = '⚠️ Interruzione: ' + e.message + ' — clicca per riprendere';
+    showToast('Arricchimento interrotto: ' + e.message, true);
+  }
+}
 
 function openDetail(id) {
   const v = STATE.vinyls.find(function(x){return x.id===id;});
