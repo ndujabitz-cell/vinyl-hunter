@@ -1,4 +1,5 @@
 import os
+import asyncio
 import io
 import json
 import base64
@@ -758,6 +759,7 @@ async def import_excel(
                 needs_enrich = not all([stampa, etichetta, stile, anno, stampa_costosa, prezzo_max])
 
                 if needs_enrich and DISCOGS_TOKEN:
+                    await asyncio.sleep(1.1)  # anti rate-limit Discogs (max 60 req/min)
                     try:
                         enriched = await cerca_su_discogs({
                             "artista": artista, "titolo": titolo,
@@ -854,6 +856,9 @@ async def _build_excel_response(user_id: str, token: str):
 
     for col, width in enumerate(col_widths, 1):
         ws.column_dimensions[ws.cell(row=1, column=col).column_letter].width = width
+
+    # Blocca la prima riga (intestazioni fisse durante lo scroll)
+    ws.freeze_panes = "A2"
 
     formati_count = Counter()
     totale_reale  = len(vinili)
