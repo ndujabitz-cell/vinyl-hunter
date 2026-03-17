@@ -285,7 +285,7 @@ async def _discogs_search(client, params: dict) -> dict | None:
         print(f"DISCOGS SEARCH EXC: {e}")
         return None
 
-async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = "") -> dict:
+async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = "", skip_prices: bool = False) -> dict:
     """
     Arricchisce i dati con Discogs seguendo una cascata di ricerche
     dal più preciso al più generico. Formato sempre specificato.
@@ -491,29 +491,29 @@ async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = ""
         prezzo_max     = ""
         master_id  = match.get("master_id")
         release_id = match.get("id")
-        if master_id:
-            stampa_costosa, prezzo_max = await cerca_prezzo_max_discogs(master_id)
-        # Fallback: se no master o prezzo non trovato, prova la release stessa
-        if not prezzo_max and release_id:
-            try:
-                async with httpx.AsyncClient(timeout=10) as pc:
-                    sr = await pc.get(
-                        f"https://api.discogs.com/marketplace/stats/{release_id}",
-                        headers=DISCOGS_HEADERS()
-                    )
-                    if sr.status_code == 200:
-                        stats = sr.json()
-                        lp = stats.get("lowest_price")
-                        if lp is not None:
-                            price = float(lp.get("value", 0) if isinstance(lp, dict) else lp or 0)
-                            if price > 0:
-                                prezzo_max = f"EUR {price:.2f}"
-                                # catno della release come stampa_costosa se non abbiamo già un master
-                                if not stampa_costosa:
-                                    stampa_costosa = stampa or match.get("catno", "")
-                                print(f"PREZZO FALLBACK release {release_id}: {prezzo_max}")
-            except Exception as e:
-                print(f"PREZZO FALLBACK ERROR: {e}")
+        if not skip_prices:
+            if master_id:
+                stampa_costosa, prezzo_max = await cerca_prezzo_max_discogs(master_id)
+            # Fallback: se no master o prezzo non trovato, prova la release stessa
+            if not prezzo_max and release_id:
+                try:
+                    async with httpx.AsyncClient(timeout=10) as pc:
+                        sr = await pc.get(
+                            f"https://api.discogs.com/marketplace/stats/{release_id}",
+                            headers=DISCOGS_HEADERS()
+                        )
+                        if sr.status_code == 200:
+                            stats = sr.json()
+                            lp = stats.get("lowest_price")
+                            if lp is not None:
+                                price = float(lp.get("value", 0) if isinstance(lp, dict) else lp or 0)
+                                if price > 0:
+                                    prezzo_max = f"EUR {price:.2f}"
+                                    if not stampa_costosa:
+                                        stampa_costosa = stampa or match.get("catno", "")
+                                    print(f"PREZZO FALLBACK release {release_id}: {prezzo_max}")
+                except Exception as e:
+                    print(f"PREZZO FALLBACK ERROR: {e}")
 
         result = {
             "artista":        disc_artista,
@@ -612,10 +612,45 @@ REGOLE FONDAMENTALI:
                 {"text": prompt},
                 {"inline_data": {"mime_type": mime, "data": b64}}
             ]}]}
-            async with httpx.AsyncClient(timeout=30) as client:
+            async with httpx.AsyncClient(timeout=45) as client:
                 r = await client.post(gemini_url, json=payload)
+            print(f"GEMINI STATUS: {r.status_code}")
+            if r.status_code == 429:
+                # Rate limit Gemini - segnala al frontend
+                print(f"GEMINI RATE LIMIT: {r.text[:200]}")
+                return JSONResponse(
+                    status_code=429,
+                    content={"error": "rate_limit", "message": "Limite Gemini raggiunto. Attendi 30 secondi e riprova."}
+                )
+            if r.status_code != 200:
+                if r.status_code == 429:
+                    print(f"GEMINI RATE LIMIT 429: {r.text[:200]}")
+                    return JSONResponse(
+                        status_code=429,
+                        content={"error": "Rate limit Gemini raggiunto. Attendi 1 minuto e riprova.", "rate_limited": True}
+                    )
+                print(f"GEMINI ERROR {r.status_code}: {r.text[:300]}")
+                return JSONResponse(
+                    status_code=503,
+                    content={"error": "gemini_error", "message": f"Errore Gemini ({r.status_code}). Riprova tra qualche secondo."}
+                )
             if r.status_code == 200:
-                text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                rj = r.json()
+                candidates = rj.get("candidates", [])
+                if not candidates:
+                    # Gemini bloccato (safety filter o altro)
+                    reason = rj.get("promptFeedback", {}).get("blockReason", "UNKNOWN")
+                    finish = rj.get("candidates", [{}])[0].get("finishReason", "") if rj.get("candidates") else ""
+                    print(f"GEMINI NO CANDIDATES: blockReason={reason} finishReason={finish} full={str(rj)[:300]}")
+                    return {**gemini_data, "error": f"Gemini bloccato: {reason}"}
+                finish_reason = candidates[0].get("finishReason", "")
+                print(f"GEMINI FINISH: {finish_reason}")
+                parts = candidates[0].get("content", {}).get("parts", [])
+                if not parts:
+                    print(f"GEMINI NO PARTS: {candidates[0]}")
+                    raise Exception("Gemini no parts in response")
+                text = parts[0].get("text", "")
+                print(f"GEMINI TEXT: {text[:400]}")
                 text = text.strip().replace("```json", "").replace("```", "").strip()
                 try:
                     parsed = json.loads(text)
@@ -632,8 +667,15 @@ REGOLE FONDAMENTALI:
                     gemini_data.update(parsed)
                 except Exception as pe:
                     print(f"JSON PARSE ERROR: {pe}")
+            elif r.status_code == 429:
+                print(f"GEMINI RATE LIMIT 429: attendi prima di riprovare")
+                gemini_data["_error"] = "rate_limit"
+            else:
+                print(f"GEMINI ERROR {r.status_code}: {r.text[:200]}")
+                gemini_data["_error"] = f"error_{r.status_code}"
         except Exception as e:
             print(f"GEMINI EXCEPTION: {e}")
+            gemini_data["_error"] = "exception"
 
     # Estrai barcode (non salvato nel DB)
     barcode_scan = extract_barcode(str(gemini_data.pop("barcode", "") or ""))
@@ -662,6 +704,9 @@ REGOLE FONDAMENTALI:
     if lato_scan == "B" and not result.get("artista") and gemini_data.get("_titolo_lato_b"):
         result["titolo"] = gemini_data["_titolo_lato_b"]
     result["catno"] = result.get("stampa", "")
+    # Passa l'eventuale errore Gemini al frontend
+    if gemini_data.get("_error"):
+        result["_error"] = gemini_data["_error"]
     return result
 
 # ── Vinili CRUD ───────────────────────────────────────────────────────────────
@@ -979,7 +1024,7 @@ async def _build_excel_response(user_id: str, token: str):
     )
 
 @app.post("/api/enrich_batch")
-async def enrich_batch(user_id: str = Form(...), token: str = Form(...), offset: int = Form(default=0), batch_size: int = Form(default=30)):
+async def enrich_batch(user_id: str = Form(...), token: str = Form(...), offset: int = Form(default=0), batch_size: int = Form(default=30), skip_prices: int = Form(default=0)):
     """
     Arricchisce i dischi già nel DB con i dati Discogs mancanti.
     Elabora batch_size dischi a partire da offset.
@@ -1018,7 +1063,7 @@ async def enrich_batch(user_id: str = Form(...), token: str = Form(...), offset:
 
             yield f"data: {json.dumps({'done': False, 'current': idx+1, 'total': total_batch, 'artista': artista, 'skipped': False}, ensure_ascii=False)}\n\n"
 
-            await asyncio.sleep(2.0)  # anti rate-limit
+            await asyncio.sleep(1.2)  # anti rate-limit
 
             try:
                 enriched = await cerca_su_discogs({
@@ -1028,7 +1073,7 @@ async def enrich_batch(user_id: str = Form(...), token: str = Form(...), offset:
                     "stampa": stampa,
                     "stampa_costosa": sc,
                     "prezzo_max": pm,
-                }, use_cache=True)
+                }, use_cache=True, skip_prices=bool(skip_prices))
 
                 # Aggiorna solo i campi vuoti
                 update = {}
