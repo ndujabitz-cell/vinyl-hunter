@@ -585,29 +585,22 @@ async def scan_label(file: UploadFile = File(...)):
             mime = file.content_type or "image/jpeg"
             gemini_url = (
                 f"https://generativelanguage.googleapis.com/v1beta/models/"
-                f"gemini-2.5-flash:generateContent?key={GEMINI_KEY}"
+                f"gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
             )
-            prompt = """Analizza questa immagine di un'etichetta di disco vinile.
-Estrai le informazioni visibili e rispondi SOLO con JSON valido senza markdown:
+            prompt = """Sei un esperto di dischi vinile. Analizza questa immagine di un'etichetta e rispondi SOLO con JSON valido senza markdown:
 {"artista":"","titolo":"","formato":"","stile":"","anno":"","etichetta":"","stampa":"","barcode":"","lato":""}
 
-REGOLE FONDAMENTALI:
-- "stampa" = numero di catalogo (catalog number). Esempi: CBS 1234, HS-032, MAF008, CLMN-126.
-  Si trova vicino al logo etichetta, sul bordo, o inciso nella plastica.
-  NON e' il codice EAN/barcode numerico lungo. NON e' il numero ISRC.
-  Se non trovi un catalog number chiaro, lascia "stampa" vuoto.
-- "artista" = nome dell'artista o band principale. Se e' il lato B e non e' visibile, lascia vuoto.
-- "titolo" = titolo del brano/album.
-  Se e' il LATO A: usa il titolo del lato A.
-  Se e' il LATO B: metti il titolo del lato B nel campo titolo.
-  Se entrambi i lati sono visibili: usa formato "Titolo A / Titolo B".
-- "lato" = "A" se e' chiaramente il lato A, "B" se e' il lato B, "" se non visibile o irrilevante (LP).
-- "formato" = 7", 10", 12", LP, EP, 45rpm, 33rpm. Per i 7" il formato e' quasi sempre 7".
-- "stile" = genere musicale. Se non visibile deducilo dall'etichetta (Blue Note=Jazz, Motown=Soul).
-- "anno" = anno a 4 cifre. NON confondere con numeri di catalogo.
-- "etichetta" = nome etichetta discografica.
-- "barcode" = sequenza numerica EAN/UPC di 8, 12 o 13 cifre sotto il barcode grafico.
-- Lascia vuoto qualsiasi campo non chiaramente visibile. NON inventare."""
+REGOLE:
+- "artista" = nome artista/band. Cercalo ovunque sull'etichetta, anche in piccolo. Se lato B senza artista visibile lascia vuoto.
+- "titolo" = titolo brano/album. Lato A: titolo A. Lato B: titolo B. Entrambi visibili: "Titolo A / Titolo B".
+- "lato" = "A", "B", o "" (per LP/album).
+- "formato" = 7", 10", 12", LP, EP. Deducilo dalla dimensione apparente se non scritto: etichette piccole=7", grandi=LP.
+- "stile" = genere musicale. Se non scritto, deducilo dall'etichetta discografica (Blue Note=Jazz, Motown=Soul, Trojan=Reggae, Def Jam=Hip-Hop, ecc.).
+- "anno" = solo anno a 4 cifre (es. 1975). Cercalo nel copyright © o nelle scritte piccole. NON confondere con numeri catalogo.
+- "etichetta" = nome etichetta discografica (es: Atlantic, Columbia, Blue Note). Cercalo vicino al logo.
+- "stampa" = catalog number. Esempi validi: CBS 1234, MAF008, ATL-50234, 2C 006-93752. Sta vicino al logo, sul bordo o inciso. NON e' il barcode EAN numerico lungo. Se non chiaro lascia vuoto.
+- "barcode" = sequenza di 8, 12 o 13 cifre sotto il grafico a barre.
+- Per i campi non visibili: prova a dedurre dai contesti (etichetta discografica, stile grafico, lingua del testo). Solo se impossibile lascia vuoto."""
             payload = {"contents": [{"parts": [
                 {"text": prompt},
                 {"inline_data": {"mime_type": mime, "data": b64}}
