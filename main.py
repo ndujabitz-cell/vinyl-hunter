@@ -538,6 +538,51 @@ async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = ""
 
 
 
+
+class EnrichRequest(BaseModel):
+    artista: Optional[str] = ""
+    titolo: Optional[str] = ""
+    formato: Optional[str] = ""
+    stile: Optional[str] = ""
+    anno: Optional[str] = ""
+    etichetta: Optional[str] = ""
+    stampa: Optional[str] = ""
+    stampa_costosa: Optional[str] = ""
+    prezzo_max: Optional[str] = ""
+    token: Optional[str] = ""
+
+@app.post("/api/enrich_single")
+async def enrich_single(req: EnrichRequest):
+    """Arricchisce un singolo disco con Discogs. Usato da scan form e catalogo."""
+    data = {
+        "artista":        req.artista or "",
+        "titolo":         req.titolo or "",
+        "formato":        req.formato or "",
+        "stile":          req.stile or "",
+        "anno":           req.anno or "",
+        "etichetta":      req.etichetta or "",
+        "stampa":         req.stampa or "",
+        "stampa_costosa": req.stampa_costosa or "",
+        "prezzo_max":     req.prezzo_max or "",
+    }
+    enriched = await cerca_su_discogs(data, use_cache=True)
+    enriched["catno"] = enriched.get("stampa", "")
+    return enriched
+
+@app.patch("/api/vinile/{vinyl_id}")
+async def update_vinyl(vinyl_id: int, data: dict, token: str = ""):
+    """Aggiorna campi specifici di un vinile."""
+    token = data.pop("token", token)
+    async with httpx.AsyncClient() as client:
+        r = await client.patch(
+            f"{SUPABASE_URL}/rest/v1/vinili?id=eq.{vinyl_id}",
+            headers={**supa_headers(token), "Prefer": "return=minimal"},
+            json=data
+        )
+    if r.status_code not in (200, 204):
+        raise HTTPException(400, f"Errore aggiornamento: {r.status_code}")
+    return {"status": "updated"}
+
 @app.post("/api/register")
 async def register(data: RegisterData):
     async with httpx.AsyncClient() as client:
@@ -616,15 +661,9 @@ REGOLE:
             if r.status_code != 200:
                 if r.status_code == 429:
                     print(f"GEMINI RATE LIMIT 429: {r.text[:200]}")
-                    return JSONResponse(
-                        status_code=429,
-                        content={"error": "Rate limit Gemini raggiunto. Attendi 1 minuto e riprova.", "rate_limited": True}
-                    )
+                    gemini_data["_error"] = "quota_gemini"
                 print(f"GEMINI ERROR {r.status_code}: {r.text[:300]}")
-                return JSONResponse(
-                    status_code=503,
-                    content={"error": "gemini_error", "message": f"Errore Gemini ({r.status_code}). Riprova tra qualche secondo."}
-                )
+                gemini_data["_error"] = f"gemini_{r.status_code}"
             if r.status_code == 200:
                 rj = r.json()
                 candidates = rj.get("candidates", [])
