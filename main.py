@@ -616,12 +616,10 @@ REGOLE FONDAMENTALI:
                 r = await client.post(gemini_url, json=payload)
             print(f"GEMINI STATUS: {r.status_code}")
             if r.status_code == 429:
-                # Rate limit Gemini - segnala al frontend
+                # Quota Gemini esaurita
                 print(f"GEMINI RATE LIMIT: {r.text[:200]}")
-                return JSONResponse(
-                    status_code=429,
-                    content={"error": "rate_limit", "message": "Limite Gemini raggiunto. Attendi 30 secondi e riprova."}
-                )
+                gemini_data["_error"] = "quota_gemini"
+                # Continua senza dati Gemini
             if r.status_code != 200:
                 if r.status_code == 429:
                     print(f"GEMINI RATE LIMIT 429: {r.text[:200]}")
