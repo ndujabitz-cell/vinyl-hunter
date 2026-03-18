@@ -225,7 +225,8 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
       <p>Cerca su Discogs stile, anno, etichetta, catno, stampa costosa e prezzo per i dischi che li hanno vuoti.</p>
       <div class="enrich-progress" id="enrich-progress"><div class="enrich-bar" id="enrich-bar"></div></div>
       <div class="enrich-status" id="enrich-status"></div>
-      <button class="btn-enrich" id="btn-enrich" onclick="startEnrich()">🔍 Avvia arricchimento</button>
+      <button class="btn-enrich" id="btn-enrich" onclick="startEnrich(false)">🔍 Arricchisci metadati</button>
+      <button class="btn-enrich" id="btn-prices" onclick="startEnrich(true)" style="margin-top:8px;background:linear-gradient(135deg,#7b0000,#e94560);">💰 Aggiorna prezzi</button>
     </div>
     <p class="section-label">Aggiungi dischi</p>
     <button class="btn-action bg-purple" onclick="goTo('screen-scan'); setNav('nav-scan')">
@@ -302,13 +303,17 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
         </div>
         <div class="field"><label>Stile / Genere</label><input id="f-stile"></div>
         <div class="row2">
-          <div class="field"><label>Stampa + costosa</label><input id="f-stampa-costosa" readonly style="color:#e94560;font-weight:600;cursor:default;background:#0d1b2e;"></div>
-          <div class="field"><label>Prezzo medio</label><input id="f-prezzo-max" readonly style="color:#e94560;font-weight:600;cursor:default;background:#0d1b2e;"></div>
+          <div class="field"><label>Stampa + costosa</label><input id="f-stampa-costosa" style="color:#e94560;font-weight:600;"></div>
+          <div class="field"><label>Prezzo medio</label><input id="f-prezzo-max" style="color:#e94560;font-weight:600;"></div>
         </div>
-        <div class="action-btns">
+        <div class="action-btns" style="grid-template-columns:1fr 1fr;margin-bottom:8px">
           <button class="btn-confirm" onclick="confirmVinyl()">✅ Aggiungi</button>
           <button class="btn-discard" onclick="discardResult()">❌ Scarta</button>
         </div>
+        <button id="btn-enrich-scan" onclick="enrichScanResult()" style="width:100%;padding:11px;background:linear-gradient(135deg,#0f3460,#533483);border:none;border-radius:10px;color:white;font-size:13px;font-weight:600;cursor:pointer;display:none;">
+          🔍 Arricchisci con Discogs
+        </button>
+        <div id="enrich-scan-status" style="font-size:11px;color:#aaa;text-align:center;margin-top:6px;min-height:14px;"></div>
       </div>
     </div>
   </div>
@@ -460,7 +465,18 @@ async function handlePhoto(event) {
   try {
     const r = await fetch('/api/scan', { method:'POST', body: form });
     const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || 'Errore OCR');
+    if (r.status === 429) {
+      throw new Error('⏳ ' + (data.message || 'Limite Gemini raggiunto. Attendi 30 secondi e riprova.'));
+    }
+    if (!r.ok) throw new Error(data.message || data.detail || 'Errore scansione');
+    if (data._error === 'quota_gemini' || (data._error && data._error.startsWith('gemini_'))) {
+      showToast('⚠️ Gemini non disponibile (quota esaurita) — inserisci i dati manualmente e premi Aggiungi. Discogs completerà i campi mancanti.', true);
+      // Apri comunque il form vuoto così l'utente può inserire almeno artista e titolo
+      document.getElementById('result-card').style.display = 'block';
+    // Mostra pulsante Arricchisci se mancano campi
+    const _hasMissing = !data.stile || !data.anno || !data.etichetta || !data.stampa || !data.stampa_costosa || !data.prezzo_max;
+    document.getElementById('btn-enrich-scan').style.display = _hasMissing ? 'block' : 'none';
+    }
     document.getElementById('f-artista').value = data.artista || '';
     document.getElementById('f-titolo').value = data.titolo || '';
     document.getElementById('f-formato').value = data.formato || '';
@@ -531,6 +547,7 @@ function renderList(vinyls) {
         '<p>' + [v.titolo, v.anno, v.etichetta].filter(Boolean).join(' · ') + '</p>' +
         price +
       '</div>' + fmt +
+      '<button class="btn-enrich-item" onclick="event.stopPropagation();enrichVinyl(' + v.id + ')" title="Arricchisci con Discogs" style="background:none;border:none;color:#00d4aa;font-size:16px;cursor:pointer;padding:4px 6px;flex-shrink:0;">🔍</button>' +
       '<button class="btn-delete" onclick="event.stopPropagation();deleteVinyl(' + v.id + ')">🗑</button>' +
     '</div>';
   }).join('');
@@ -676,9 +693,12 @@ let enrichOffset  = 0;
 let enrichTotal   = 0;
 let enrichDone    = 0;
 
-async function startEnrich() {
+let enrichPricesOnly = false;
+
+async function startEnrich(pricesOnly) {
   if (enrichRunning) return;
   if (!STATE.userId || !STATE.token) return showToast('Devi essere loggato', true);
+  enrichPricesOnly = pricesOnly || false;
   // Recupera totale dischi
   try {
     const cr = await fetch('/api/count/' + STATE.userId + '?token=' + encodeURIComponent(STATE.token));
@@ -691,7 +711,9 @@ async function startEnrich() {
   enrichDone    = 0;
   document.getElementById('enrich-progress').style.display = 'block';
   document.getElementById('btn-enrich').disabled = true;
-  document.getElementById('btn-enrich').textContent = '⏳ In corso...';
+  document.getElementById('btn-prices').disabled = true;
+  const label = pricesOnly ? '💰 Aggiornamento prezzi...' : '🔍 Arricchimento...';
+  document.getElementById('btn-enrich').textContent = label;
   await runEnrichBatch();
 }
 
@@ -702,6 +724,7 @@ async function runEnrichBatch() {
   form.append('token', STATE.token);
   form.append('offset', enrichOffset);
   form.append('batch_size', 30);
+  form.append('skip_prices', enrichPricesOnly ? '0' : '1');
 
   try {
     const r = await fetch('/api/enrich_batch', { method: 'POST', body: form });
@@ -738,7 +761,8 @@ async function runEnrichBatch() {
               document.getElementById('enrich-status').textContent =
                 '✅ Completato! ' + enrichDone + ' dischi aggiornati su ' + enrichTotal;
               document.getElementById('btn-enrich').disabled = false;
-              document.getElementById('btn-enrich').textContent = '🔍 Avvia arricchimento';
+              document.getElementById('btn-prices').disabled = false;
+              document.getElementById('btn-enrich').textContent = '🔍 Arricchisci metadati';
               showToast('✅ Arricchimento completato: ' + enrichDone + ' dischi aggiornati!');
               loadVinyls();
             }
@@ -755,9 +779,111 @@ async function runEnrichBatch() {
   } catch(e) {
     enrichRunning = false;
     document.getElementById('btn-enrich').disabled = false;
-    document.getElementById('btn-enrich').textContent = '🔍 Riprendi arricchimento';
+    document.getElementById('btn-enrich').textContent = enrichPricesOnly ? '💰 Riprendi prezzi' : '🔍 Riprendi metadati';
+    document.getElementById('btn-prices').disabled = false;
     document.getElementById('enrich-status').textContent = '⚠️ Interruzione: ' + e.message + ' — clicca per riprendere';
     showToast('Arricchimento interrotto: ' + e.message, true);
+  }
+}
+
+
+// ── ARRICCHIMENTO SINGOLO ────────────────────────────────────────────────────
+
+async function enrichScanResult() {
+  const btn = document.getElementById('btn-enrich-scan');
+  const status = document.getElementById('enrich-scan-status');
+  btn.disabled = true;
+  btn.textContent = '⏳ Ricerca in corso...';
+  status.textContent = '';
+
+  const data = {
+    artista:   document.getElementById('f-artista').value,
+    titolo:    document.getElementById('f-titolo').value,
+    formato:   document.getElementById('f-formato').value,
+    stile:     document.getElementById('f-stile').value,
+    anno:      document.getElementById('f-anno').value,
+    etichetta: document.getElementById('f-etichetta').value,
+    stampa:    document.getElementById('f-catno').value,
+    stampa_costosa: document.getElementById('f-stampa-costosa').value,
+    prezzo_max: document.getElementById('f-prezzo-max').value,
+  };
+
+  try {
+    const r = await fetch('/api/enrich_single', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...data, token: STATE.token})
+    });
+    const enriched = await r.json();
+    if (!r.ok) throw new Error(enriched.detail || 'Errore arricchimento');
+
+    // Aggiorna solo i campi vuoti
+    if (!document.getElementById('f-artista').value   && enriched.artista)   document.getElementById('f-artista').value   = enriched.artista;
+    if (!document.getElementById('f-titolo').value    && enriched.titolo)    document.getElementById('f-titolo').value    = enriched.titolo;
+    if (!document.getElementById('f-formato').value   && enriched.formato)   document.getElementById('f-formato').value   = enriched.formato;
+    if (!document.getElementById('f-stile').value     && enriched.stile)     document.getElementById('f-stile').value     = enriched.stile;
+    if (!document.getElementById('f-anno').value      && enriched.anno)      document.getElementById('f-anno').value      = enriched.anno;
+    if (!document.getElementById('f-etichetta').value && enriched.etichetta) document.getElementById('f-etichetta').value = enriched.etichetta;
+    if (!document.getElementById('f-catno').value     && enriched.stampa)    document.getElementById('f-catno').value     = enriched.stampa;
+    document.getElementById('f-stampa-costosa').value = enriched.stampa_costosa || document.getElementById('f-stampa-costosa').value;
+    document.getElementById('f-prezzo-max').value     = enriched.prezzo_max     || document.getElementById('f-prezzo-max').value;
+
+    const found = Object.values(enriched).filter(v => v && v !== '').length;
+    status.textContent = found > 0 ? '✅ Dati trovati su Discogs!' : '⚠️ Nessun dato trovato';
+    btn.textContent = '🔍 Arricchisci con Discogs';
+    btn.disabled = false;
+  } catch(e) {
+    status.textContent = '❌ ' + e.message;
+    btn.textContent = '🔍 Arricchisci con Discogs';
+    btn.disabled = false;
+  }
+}
+
+async function enrichVinyl(id) {
+  const v = STATE.vinyls.find(x => x.id === id);
+  if (!v) return;
+
+  showToast('🔍 Arricchimento in corso...');
+  try {
+    const r = await fetch('/api/enrich_single', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        artista: v.artista, titolo: v.titolo, formato: v.formato,
+        stile: v.stile, anno: v.anno, etichetta: v.etichetta,
+        stampa: v.stampa, stampa_costosa: v.stampa_costosa,
+        prezzo_max: v.prezzo_max, token: STATE.token
+      })
+    });
+    const enriched = await r.json();
+    if (!r.ok) throw new Error(enriched.detail || 'Errore');
+
+    // Aggiorna solo campi vuoti nel DB
+    const update = {};
+    if (!v.stile     && enriched.stile)          update.stile          = enriched.stile;
+    if (!v.anno      && enriched.anno)           update.anno           = enriched.anno;
+    if (!v.etichetta && enriched.etichetta)      update.etichetta      = enriched.etichetta;
+    if (!v.stampa    && enriched.stampa)         update.stampa         = enriched.stampa;
+    if (enriched.stampa_costosa)                 update.stampa_costosa = enriched.stampa_costosa;
+    if (enriched.prezzo_max)                     update.prezzo_max     = enriched.prezzo_max;
+    if (!v.artista   && enriched.artista)        update.artista        = enriched.artista;
+    if (!v.titolo    && enriched.titolo)         update.titolo         = enriched.titolo;
+    if (!v.formato   && enriched.formato)        update.formato        = enriched.formato;
+
+    if (Object.keys(update).length > 0) {
+      const upd = await fetch('/api/vinile/' + id, {
+        method: 'PATCH',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({...update, token: STATE.token})
+      });
+      if (!upd.ok) throw new Error('Errore salvataggio');
+      showToast('✅ Dati aggiornati!');
+      loadVinyls();
+    } else {
+      showToast('ℹ️ Nessun nuovo dato trovato');
+    }
+  } catch(e) {
+    showToast('❌ ' + e.message, true);
   }
 }
 
