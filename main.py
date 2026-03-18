@@ -569,16 +569,33 @@ async def enrich_single(req: EnrichRequest):
     enriched["catno"] = enriched.get("stampa", "")
     return enriched
 
+class VinylUpdate(BaseModel):
+    token: Optional[str] = ""
+    artista: Optional[str] = None
+    titolo: Optional[str] = None
+    formato: Optional[str] = None
+    stile: Optional[str] = None
+    anno: Optional[str] = None
+    etichetta: Optional[str] = None
+    stampa: Optional[str] = None
+    stampa_costosa: Optional[str] = None
+    prezzo_max: Optional[str] = None
+
 @app.patch("/api/vinile/{vinyl_id}")
-async def update_vinyl(vinyl_id: int, data: dict, token: str = ""):
+async def update_vinyl(vinyl_id: int, data: VinylUpdate):
     """Aggiorna campi specifici di un vinile."""
-    token = data.pop("token", token)
+    token = data.token or ""
+    update = {k: v for k, v in data.dict().items()
+              if k != "token" and v is not None}
+    if not update:
+        return {"status": "nothing_to_update"}
     async with httpx.AsyncClient() as client:
         r = await client.patch(
             f"{SUPABASE_URL}/rest/v1/vinili?id=eq.{vinyl_id}",
             headers={**supa_headers(token), "Prefer": "return=minimal"},
-            json=data
+            json=update
         )
+    print(f"PATCH vinyl {vinyl_id}: {r.status_code} fields={list(update.keys())}")
     if r.status_code not in (200, 204):
         raise HTTPException(400, f"Errore aggiornamento: {r.status_code}")
     return {"status": "updated"}
