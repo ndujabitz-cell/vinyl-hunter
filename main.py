@@ -584,12 +584,13 @@ async def update_vinyl(vinyl_id: int, data: VinylUpdate):
     token = data.token or ""
     update = {k: v for k, v in data.dict().items()
               if k != "token" and v is not None}
+    print(f"PATCH vinyl {vinyl_id}: update fields = {list(update.keys())} values = {update}")
     if not update:
         return {"status": "nothing_to_update"}
     async with httpx.AsyncClient() as client:
         r = await client.patch(
             f"{SUPABASE_URL}/rest/v1/vinili?id=eq.{vinyl_id}",
-            headers={**supa_headers(token), "Prefer": "return=minimal"},
+            headers={**supa_headers(token), "Prefer": "return=minimal", "Content-Type": "application/json"},
             json=update
         )
     print(f"PATCH vinyl {vinyl_id}: {r.status_code} fields={list(update.keys())}")
