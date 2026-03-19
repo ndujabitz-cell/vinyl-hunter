@@ -285,7 +285,7 @@ async def _discogs_search(client, params: dict) -> dict | None:
         print(f"DISCOGS SEARCH EXC: {e}")
         return None
 
-async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = "", skip_prices: bool = False) -> dict:
+async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = "", skip_prices: bool = False, fast_mode: bool = False) -> dict:
     """
     Arricchisce i dati con Discogs seguendo una cascata di ricerche
     dal più preciso al più generico. Formato sempre specificato.
@@ -405,39 +405,36 @@ async def cerca_su_discogs(data: dict, use_cache: bool = True, barcode: str = ""
                 if match: break
 
         # 6. artista + titolo + etichetta + anno + formato
-        if not match and artista and lato_a and anno:
+        if not match and artista and lato_a and anno and not fast_mode:
             print("Tentativo 6: artista + titolo + etichetta + anno + formato")
             p = {"artist": artista, "title": lato_a, "format": fmt_discogs, "year": anno}
             if etichetta: p["label"] = etichetta
             match = await _discogs_search(client, p)
 
         # 7. artista + titolo + formato (fallback minimo)
-        if not match and artista and lato_a:
+        if not match and artista and lato_a and not fast_mode:
             print("Tentativo 7: artista + titolo + formato (fallback)")
             match = await _discogs_search(client, {
                 "artist": artista, "title": lato_a, "format": fmt_discogs
             })
 
-        # 7b. se artista vuoto ma etichetta presente: q=etichetta + titolo
-        if not match and not artista and etichetta and lato_a:
-            print("Tentativo 7b: etichetta + titolo (artista mancante)")
-            match = await _discogs_search(client, {
-                "q": f"{etichetta} {lato_a}", "format": fmt_discogs
-            })
-
-        # 7c. solo etichetta + catno (artista e titolo entrambi vuoti), tutte le varianti
-        if not match and not artista and not lato_a and etichetta and catno:
-            for cv in catno_variants:
-                print(f"Tentativo 7c: etichetta={etichetta!r} + catno={cv!r}")
-                match = await _discogs_search(client, {"label": etichetta, "catno": cv})
-                if match: break
-
-        # 7d. solo catno senza etichetta (ultimo tentativo se abbiamo solo catno)
-        if not match and not artista and not lato_a and catno:
-            for cv in catno_variants:
-                print(f"Tentativo 7d: solo catno={cv!r} senza altri filtri")
-                match = await _discogs_search(client, {"catno": cv})
-                if match: break
+        # 7b/7c/7d solo se non fast_mode
+        if not fast_mode:
+            if not match and not artista and etichetta and lato_a:
+                print("Tentativo 7b: etichetta + titolo")
+                match = await _discogs_search(client, {
+                    "q": f"{etichetta} {lato_a}", "format": fmt_discogs
+                })
+            if not match and not artista and not lato_a and etichetta and catno:
+                for cv in catno_variants:
+                    print(f"Tentativo 7c: etichetta={etichetta!r} + catno={cv!r}")
+                    match = await _discogs_search(client, {"label": etichetta, "catno": cv})
+                    if match: break
+            if not match and not artista and not lato_a and catno:
+                for cv in catno_variants:
+                    print(f"Tentativo 7d: solo catno={cv!r}")
+                    match = await _discogs_search(client, {"catno": cv})
+                    if match: break
 
         if not match:
             print("DISCOGS: nessun match trovato")
@@ -565,7 +562,7 @@ async def enrich_single(req: EnrichRequest):
         "stampa_costosa": req.stampa_costosa or "",
         "prezzo_max":     req.prezzo_max or "",
     }
-    enriched = await cerca_su_discogs(data, use_cache=True)
+    enriched = await cerca_su_discogs(data, use_cache=True, fast_mode=True)
     enriched["catno"] = enriched.get("stampa", "")
     return enriched
 
