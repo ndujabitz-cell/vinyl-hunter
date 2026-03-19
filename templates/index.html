@@ -977,7 +977,73 @@ async function saveEdit() {
   }
 }
 
+
+// ── FUNZIONI DETAIL MODAL ───────────────────────────────────────────────────
+
+let _currentDetailId = null;
+
+async function enrichCurrentDetail() {
+  if (!_currentDetailId) return;
+  await enrichVinyl(_currentDetailId);
+}
+
+function toggleEditDetail() {
+  const form = document.getElementById('edit-detail-form');
+  const btn  = document.getElementById('btn-edit-detail');
+  if (!form || !_currentDetailId) return;
+  const v = STATE.vinyls.find(x => x.id === _currentDetailId);
+  if (!v) return;
+  if (form.style.display === 'none') {
+    document.getElementById('ed-artista').value   = v.artista   || '';
+    document.getElementById('ed-titolo').value    = v.titolo    || '';
+    document.getElementById('ed-formato').value   = v.formato   || '';
+    document.getElementById('ed-anno').value      = v.anno      || '';
+    document.getElementById('ed-etichetta').value = v.etichetta || '';
+    document.getElementById('ed-stile').value     = v.stile     || '';
+    document.getElementById('ed-stampa').value    = v.stampa    || v.catno || '';
+    document.getElementById('ed-prezzo').value    = v.prezzo_max || '';
+    form.style.display = 'block';
+    btn.textContent = 'Annulla';
+  } else {
+    form.style.display = 'none';
+    btn.textContent = 'Modifica';
+  }
+}
+
+async function saveDetailEdit() {
+  if (!_currentDetailId) return;
+  const update = {
+    artista:    document.getElementById('ed-artista').value,
+    titolo:     document.getElementById('ed-titolo').value,
+    formato:    document.getElementById('ed-formato').value,
+    anno:       document.getElementById('ed-anno').value,
+    etichetta:  document.getElementById('ed-etichetta').value,
+    stile:      document.getElementById('ed-stile').value,
+    stampa:     document.getElementById('ed-stampa').value,
+    prezzo_max: document.getElementById('ed-prezzo').value,
+    token:      STATE.token,
+  };
+  try {
+    const r = await fetch('/api/vinile/' + _currentDetailId, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(update)
+    });
+    if (!r.ok) throw new Error('Errore salvataggio');
+    const idx = STATE.vinyls.findIndex(x => x.id === _currentDetailId);
+    if (idx !== -1) Object.assign(STATE.vinyls[idx], update);
+    renderList(STATE.vinyls);
+    openDetail(_currentDetailId);
+    document.getElementById('edit-detail-form').style.display = 'none';
+    document.getElementById('btn-edit-detail').textContent = 'Modifica';
+    showToast('Disco aggiornato!');
+  } catch(e) {
+    showToast(e.message, true);
+  }
+}
+
 function openDetail(id) {
+  _currentDetailId = id;
   const v = STATE.vinyls.find(function(x){return x.id===id;});
   if (!v) return;
   document.getElementById('d-artista').textContent = v.artista||'';
