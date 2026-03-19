@@ -350,7 +350,52 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
     <div class="drow"><span class="dlabel">Stampa (tua)</span><span class="dvalue" id="d-stampa">-</span></div>
     <div class="drow"><span class="dlabel">Stampa + costosa</span><span class="dvalue dred" id="d-stampa-costosa">-</span></div>
     <div class="drow"><span class="dlabel">Prezzo medio</span><span class="dvalue dred" id="d-prezzo">-</span></div>
-    <button class="dclose" onclick="document.getElementById('detail-overlay').style.display='none'">Chiudi</button>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:20px;">
+      <button class="dclose" style="margin-top:0" onclick="document.getElementById('detail-overlay').style.display='none'">Chiudi</button>
+      <button class="dclose" style="margin-top:0;background:#533483" onclick="enrichCurrentDetail()">🔍 Arricchisci</button>
+    </div>
+    <button id="btn-edit-detail" class="dclose" style="margin-top:8px;background:#0f3460;border:1px solid #533483" onclick="toggleEditDetail()">✏️ Modifica</button>
+    <div id="edit-detail-form" style="display:none;margin-top:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+        <div><label style="font-size:10px;color:#aaa;display:block;margin-bottom:3px">ARTISTA</label><input id="ed-artista" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:6px;padding:8px;color:#eee;font-size:13px;box-sizing:border-box"></div>
+        <div><label style="font-size:10px;color:#aaa;display:block;margin-bottom:3px">TITOLO</label><input id="ed-titolo" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:6px;padding:8px;color:#eee;font-size:13px;box-sizing:border-box"></div>
+        <div><label style="font-size:10px;color:#aaa;display:block;margin-bottom:3px">FORMATO</label><input id="ed-formato" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:6px;padding:8px;color:#eee;font-size:13px;box-sizing:border-box"></div>
+        <div><label style="font-size:10px;color:#aaa;display:block;margin-bottom:3px">ANNO</label><input id="ed-anno" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:6px;padding:8px;color:#eee;font-size:13px;box-sizing:border-box"></div>
+        <div><label style="font-size:10px;color:#aaa;display:block;margin-bottom:3px">ETICHETTA</label><input id="ed-etichetta" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:6px;padding:8px;color:#eee;font-size:13px;box-sizing:border-box"></div>
+        <div><label style="font-size:10px;color:#aaa;display:block;margin-bottom:3px">STILE</label><input id="ed-stile" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:6px;padding:8px;color:#eee;font-size:13px;box-sizing:border-box"></div>
+        <div><label style="font-size:10px;color:#aaa;display:block;margin-bottom:3px">CAT. NO.</label><input id="ed-stampa" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:6px;padding:8px;color:#eee;font-size:13px;box-sizing:border-box"></div>
+        <div><label style="font-size:10px;color:#aaa;display:block;margin-bottom:3px">PREZZO</label><input id="ed-prezzo" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:6px;padding:8px;color:#eee;font-size:13px;box-sizing:border-box"></div>
+      </div>
+      <button class="dclose" onclick="saveDetailEdit()" style="background:#0f9b58;">💾 Salva modifiche</button>
+    </div>
+
+  </div>
+</div>
+
+<!-- EDIT MODAL -->
+<div class="detail-overlay" id="edit-overlay" style="display:none" onclick="if(event.target===this)this.style.display='none'">
+  <div class="detail-sheet">
+    <h2 style="margin-bottom:16px">✏️ Modifica disco</h2>
+    <input type="hidden" id="edit-vinyl-id">
+    <div class="field"><label>Artista</label><input id="edit-artista" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:8px;padding:10px;color:#eee;font-size:14px;outline:none;box-sizing:border-box;"></div>
+    <div class="field"><label>Titolo</label><input id="edit-titolo" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:8px;padding:10px;color:#eee;font-size:14px;outline:none;box-sizing:border-box;"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="field"><label>Formato</label><input id="edit-formato" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:8px;padding:10px;color:#eee;font-size:14px;outline:none;box-sizing:border-box;"></div>
+      <div class="field"><label>Anno</label><input id="edit-anno" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:8px;padding:10px;color:#eee;font-size:14px;outline:none;box-sizing:border-box;"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="field"><label>Etichetta</label><input id="edit-etichetta" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:8px;padding:10px;color:#eee;font-size:14px;outline:none;box-sizing:border-box;"></div>
+      <div class="field"><label>Cat. No.</label><input id="edit-stampa" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:8px;padding:10px;color:#eee;font-size:14px;outline:none;box-sizing:border-box;"></div>
+    </div>
+    <div class="field"><label>Stile</label><input id="edit-stile" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:8px;padding:10px;color:#eee;font-size:14px;outline:none;box-sizing:border-box;"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="field"><label>Stampa + costosa</label><input id="edit-stampa-costosa" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:8px;padding:10px;color:#e94560;font-size:14px;outline:none;box-sizing:border-box;"></div>
+      <div class="field"><label>Prezzo medio</label><input id="edit-prezzo" style="width:100%;background:#16213e;border:1px solid #533483;border-radius:8px;padding:10px;color:#e94560;font-size:14px;outline:none;box-sizing:border-box;"></div>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px">
+      <button onclick="saveEdit()" style="padding:13px;background:#0f9b58;border:none;border-radius:10px;color:white;font-size:14px;font-weight:600;cursor:pointer;">💾 Salva</button>
+      <button onclick="document.getElementById('edit-overlay').style.display='none'" style="padding:13px;background:#2a2a3e;border:none;border-radius:10px;color:#aaa;font-size:14px;cursor:pointer;">Annulla</button>
+    </div>
   </div>
 </div>
 <div class="toast" id="toast"></div>
@@ -868,11 +913,65 @@ async function enrichVinyl(id) {
         body: JSON.stringify({...update, token: STATE.token})
       });
       if (!upd.ok) throw new Error('Errore salvataggio');
-      showToast('✅ Dati aggiornati!');
-      loadVinyls();
+      // Aggiorna localmente senza rifare fetch
+      const vidx = STATE.vinyls.findIndex(x => x.id === id);
+      if (vidx !== -1) Object.assign(STATE.vinyls[vidx], update);
+      renderList(STATE.vinyls);
+      openDetail(id);
+      const campi = Object.keys(update).filter(k=>k!=='token').join(', ');
+      showToast('✅ Aggiornati: ' + campi);
     } else {
-      showToast('ℹ️ Nessun nuovo dato trovato');
+      showToast('ℹ️ Nessun nuovo dato trovato su Discogs');
     }
+  } catch(e) {
+    showToast('❌ ' + e.message, true);
+  }
+}
+
+
+function openEdit(id) {
+  const v = STATE.vinyls.find(x => x.id === id);
+  if (!v) return;
+  document.getElementById('edit-vinyl-id').value      = id;
+  document.getElementById('edit-artista').value       = v.artista || '';
+  document.getElementById('edit-titolo').value        = v.titolo  || '';
+  document.getElementById('edit-formato').value       = v.formato || '';
+  document.getElementById('edit-anno').value          = v.anno    || '';
+  document.getElementById('edit-etichetta').value     = v.etichetta || '';
+  document.getElementById('edit-stampa').value        = v.stampa  || v.catno || '';
+  document.getElementById('edit-stile').value         = v.stile   || '';
+  document.getElementById('edit-stampa-costosa').value = v.stampa_costosa || '';
+  document.getElementById('edit-prezzo').value        = v.prezzo_max || '';
+  document.getElementById('detail-overlay').style.display = 'none';
+  document.getElementById('edit-overlay').style.display   = 'flex';
+}
+
+async function saveEdit() {
+  const id = parseInt(document.getElementById('edit-vinyl-id').value);
+  const update = {
+    artista:        document.getElementById('edit-artista').value,
+    titolo:         document.getElementById('edit-titolo').value,
+    formato:        document.getElementById('edit-formato').value,
+    anno:           document.getElementById('edit-anno').value,
+    etichetta:      document.getElementById('edit-etichetta').value,
+    stampa:         document.getElementById('edit-stampa').value,
+    stile:          document.getElementById('edit-stile').value,
+    stampa_costosa: document.getElementById('edit-stampa-costosa').value,
+    prezzo_max:     document.getElementById('edit-prezzo').value,
+    token:          STATE.token,
+  };
+  try {
+    const r = await fetch('/api/vinile/' + id, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(update)
+    });
+    if (!r.ok) throw new Error('Errore salvataggio');
+    document.getElementById('edit-overlay').style.display = 'none';
+    showToast('✅ Disco aggiornato!');
+    const idx = STATE.vinyls.findIndex(x => x.id === id);
+    if (idx !== -1) Object.assign(STATE.vinyls[idx], update);
+    renderList(STATE.vinyls);
   } catch(e) {
     showToast('❌ ' + e.message, true);
   }
@@ -882,6 +981,7 @@ function openDetail(id) {
   const v = STATE.vinyls.find(function(x){return x.id===id;});
   if (!v) return;
   document.getElementById('d-artista').textContent = v.artista||'';
+  document.getElementById('d-artista').dataset.id = id;
   document.getElementById('d-titolo').textContent  = v.titolo||'';
   document.getElementById('d-formato').textContent = v.formato||'-';
   document.getElementById('d-anno').textContent    = v.anno||'-';
