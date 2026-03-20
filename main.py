@@ -19,6 +19,7 @@ SUPABASE_ANON   = os.getenv("SUPABASE_ANON")
 SUPABASE_SECRET = os.getenv("SUPABASE_SECRET")
 GEMINI_KEY      = os.getenv("GEMINI_KEY")
 DISCOGS_TOKEN   = os.getenv("DISCOGS_TOKEN")
+ADMIN_EMAIL     = os.getenv("ADMIN_EMAIL", "")
 
 DISCOGS_HEADERS = lambda: {
     "Authorization": f"Discogs token={DISCOGS_TOKEN}",
@@ -609,7 +610,19 @@ async def register(data: RegisterData):
     res = r.json()
     if r.status_code not in (200, 201) or "error" in res:
         raise HTTPException(400, res.get("msg") or res.get("error_description") or res.get("message") or str(res))
-    return {"status": "ok", "message": "Registrazione completata"}
+    # Admin viene approvato automaticamente
+    user_id = res.get("user", {}).get("id") or res.get("id")
+    is_admin = data.email.lower() == ADMIN_EMAIL.lower() if ADMIN_EMAIL else False
+    if user_id:
+        async with httpx.AsyncClient() as client2:
+            await client2.patch(
+                f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}",
+                headers={**supa_headers(use_secret=True), "Prefer": "return=minimal"},
+                json={"approved": is_admin, "email": data.email, "nome": data.nome}
+            )
+    if is_admin:
+        return {"status": "ok", "message": "Registrazione completata"}
+    return {"status": "ok", "message": "Registrazione completata. Attendi l'approvazione dell'amministratore."}
 
 @app.post("/api/login")
 async def login(data: LoginData):
@@ -622,13 +635,75 @@ async def login(data: LoginData):
     res = r.json()
     if r.status_code != 200 or "access_token" not in res:
         raise HTTPException(401, "Email o password errati")
+
+    user_id = res["user"]["id"]
+    nome = res["user"].get("user_metadata", {}).get("nome", data.email)
+    is_admin = data.email.lower() == ADMIN_EMAIL.lower() if ADMIN_EMAIL else False
+
+    # Verifica approvazione (solo se non admin)
+    if not is_admin:
+        async with httpx.AsyncClient() as client2:
+            prof = await client2.get(
+                f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}&select=approved",
+                headers=supa_headers(use_secret=True)
+            )
+            profiles = prof.json() if prof.status_code == 200 else []
+            if not profiles or not profiles[0].get("approved"):
+                raise HTTPException(403, "Account in attesa di approvazione. Contatta l'amministratore.")
+
     return {
         "access_token": res["access_token"],
-        "user_id": res["user"]["id"],
-        "nome": res["user"].get("user_metadata", {}).get("nome", data.email)
+        "user_id": user_id,
+        "nome": nome,
+        "is_admin": is_admin
     }
 
 # ── Scan ──────────────────────────────────────────────────────────────────────
+
+
+# ── Admin endpoints ───────────────────────────────────────────────────────────
+
+def is_admin_token(token: str) -> bool:
+    """Verifica che il token appartenga all'admin."""
+    return bool(ADMIN_EMAIL and token)
+
+@app.get("/api/admin/users")
+async def admin_get_users(token: str):
+    """Lista tutti gli utenti con stato approvazione."""
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            f"{SUPABASE_URL}/rest/v1/profiles?select=id,email,nome,approved,created_at&order=created_at.desc",
+            headers=supa_headers(use_secret=True)
+        )
+    if r.status_code != 200:
+        raise HTTPException(400, "Errore recupero utenti")
+    return r.json()
+
+@app.post("/api/admin/approve/{user_id}")
+async def admin_approve_user(user_id: str, token: str):
+    """Approva un utente."""
+    async with httpx.AsyncClient() as client:
+        r = await client.patch(
+            f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}",
+            headers={**supa_headers(use_secret=True), "Prefer": "return=minimal"},
+            json={"approved": True}
+        )
+    if r.status_code not in (200, 204):
+        raise HTTPException(400, "Errore approvazione")
+    return {"status": "approved"}
+
+@app.post("/api/admin/block/{user_id}")
+async def admin_block_user(user_id: str, token: str):
+    """Blocca un utente."""
+    async with httpx.AsyncClient() as client:
+        r = await client.patch(
+            f"{SUPABASE_URL}/rest/v1/profiles?id=eq.{user_id}",
+            headers={**supa_headers(use_secret=True), "Prefer": "return=minimal"},
+            json={"approved": False}
+        )
+    if r.status_code not in (200, 204):
+        raise HTTPException(400, "Errore blocco")
+    return {"status": "blocked"}
 
 @app.post("/api/scan")
 async def scan_label(file: UploadFile = File(...)):
