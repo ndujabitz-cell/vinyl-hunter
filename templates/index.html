@@ -117,19 +117,6 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
 .toast { position: fixed; bottom: 90px; left: 50%; transform: translateX(-50%); background: #0f9b58; color: white; padding: 10px 22px; border-radius: 20px; font-size: 13px; font-weight: 600; z-index: 999; opacity: 0; transition: opacity 0.3s; white-space: nowrap; pointer-events: none; }
 .toast.show { opacity: 1; }
 .toast.error { background: #e94560; }
-/* ADMIN PANEL */
-.admin-screen { padding: 20px; }
-.admin-screen h2 { font-size: 18px; font-weight: 700; margin-bottom: 16px; }
-.user-card { background: #0f3460; border-radius: 12px; padding: 14px 16px; margin-bottom: 10px; display: flex; align-items: center; gap: 12px; }
-.user-info { flex: 1; }
-.user-info .email { font-size: 14px; font-weight: 600; }
-.user-info .meta { font-size: 11px; color: #aaa; margin-top: 2px; }
-.badge-approved { background: #0f9b58; color: white; font-size: 10px; padding: 3px 8px; border-radius: 8px; }
-.badge-pending { background: #533483; color: white; font-size: 10px; padding: 3px 8px; border-radius: 8px; }
-.badge-blocked { background: #e94560; color: white; font-size: 10px; padding: 3px 8px; border-radius: 8px; }
-.btn-approve { background: #0f9b58; border: none; border-radius: 8px; color: white; font-size: 12px; padding: 6px 12px; cursor: pointer; }
-.btn-block { background: #e94560; border: none; border-radius: 8px; color: white; font-size: 12px; padding: 6px 12px; cursor: pointer; margin-left: 6px; }
-
 /* ENRICH PANEL */
 .enrich-panel { background: #0f3460; border-radius: 14px; padding: 18px; margin-bottom: 16px; }
 .enrich-panel h4 { font-size: 13px; font-weight: 700; margin-bottom: 6px; color: #00d4aa; }
@@ -338,14 +325,6 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
   </div>
 </div>
 
-
-<!-- ADMIN SCREEN -->
-<div class="screen" id="screen-admin" style="display:none">
-  <div class="admin-screen">
-    <h2>👤 Gestione Utenti</h2>
-    <div id="admin-user-list"><p style="color:#aaa">Caricamento...</p></div>
-  </div>
-</div>
 <!-- BOTTOM NAV -->
 <div class="bottom-nav" id="bottom-nav" style="display:none">
   <button class="nav-btn active" id="nav-home" onclick="goTo('screen-home'); setNav('nav-home')">
@@ -356,9 +335,6 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
   </button>
   <button class="nav-btn" id="nav-list" onclick="goTo('screen-list'); setNav('nav-list'); loadVinyls()">
     <span>📋</span> Catalogo
-  </button>
-  <button class="nav-btn" id="nav-admin" style="display:none" onclick="goTo('screen-admin'); setNav('nav-admin'); loadAdminUsers()">
-    <span>⚙️</span> Admin
   </button>
 </div>
 
@@ -457,8 +433,6 @@ async function doLogin() {
     STATE.token = data.access_token;
     STATE.userId = data.user_id;
     STATE.nome = data.nome;
-      STATE.isAdmin = data.is_admin || false;
-      document.getElementById('nav-admin').style.display = STATE.isAdmin ? 'flex' : 'none';
     localStorage.setItem('vh_session', JSON.stringify({token: STATE.token, userId: STATE.userId, nome: STATE.nome}));
     showApp();
     loadVinyls();
@@ -1066,50 +1040,6 @@ async function saveDetailEdit() {
   } catch(e) {
     showToast(e.message, true);
   }
-}
-
-
-// ── ADMIN ────────────────────────────────────────────────────────────────────
-async function loadAdminUsers() {
-  const el = document.getElementById('admin-user-list');
-  el.innerHTML = '<p style="color:#aaa">Caricamento...</p>';
-  try {
-    const r = await fetch('/api/admin/users?token=' + encodeURIComponent(STATE.token));
-    const users = await r.json();
-    if (!users.length) { el.innerHTML = '<p style="color:#aaa">Nessun utente</p>'; return; }
-    el.innerHTML = users.map(u => {
-      const badge = u.approved
-        ? '<span class="badge-approved">Approvato</span>'
-        : '<span class="badge-pending">In attesa</span>';
-      const btnApprove = !u.approved
-        ? '<button class="btn-approve" onclick="adminApprove('' + u.id + '')">✅ Approva</button>'
-        : '';
-      const btnBlock = u.approved
-        ? '<button class="btn-block" onclick="adminBlock('' + u.id + '')">🚫 Blocca</button>'
-        : '<button class="btn-block" onclick="adminBlock('' + u.id + '')">🗑 Rimuovi</button>';
-      return '<div class="user-card">' +
-        '<div class="user-info">' +
-          '<div class="email">' + (u.nome || u.email) + '</div>' +
-          '<div class="meta">' + u.email + ' · ' + new Date(u.created_at).toLocaleDateString('it-IT') + '</div>' +
-        '</div>' +
-        badge + btnApprove + btnBlock +
-      '</div>';
-    }).join('');
-  } catch(e) {
-    el.innerHTML = '<p style="color:#e94560">Errore: ' + e.message + '</p>';
-  }
-}
-
-async function adminApprove(userId) {
-  await fetch('/api/admin/approve/' + userId + '?token=' + encodeURIComponent(STATE.token), {method:'POST'});
-  showToast('✅ Utente approvato');
-  loadAdminUsers();
-}
-
-async function adminBlock(userId) {
-  await fetch('/api/admin/block/' + userId + '?token=' + encodeURIComponent(STATE.token), {method:'POST'});
-  showToast('🚫 Utente bloccato');
-  loadAdminUsers();
 }
 
 function openDetail(id) {
