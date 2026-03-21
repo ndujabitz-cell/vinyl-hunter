@@ -1082,11 +1082,11 @@ async function loadAdminUsers() {
         ? '<span class="badge-approved">Approvato</span>'
         : '<span class="badge-pending">In attesa</span>';
       const btnApprove = !u.approved
-        ? '<button class="btn-approve" onclick="adminApprove('' + u.id + '')">✅ Approva</button>'
+        ? '<button class="btn-approve" data-id="' + u.id + '" onclick="adminApprove(this.dataset.id)">✅ Approva</button>'
         : '';
       const btnBlock = u.approved
-        ? '<button class="btn-block" onclick="adminBlock('' + u.id + '')">🚫 Blocca</button>'
-        : '<button class="btn-block" onclick="adminBlock('' + u.id + '')">🗑 Rimuovi</button>';
+        ? '<button class="btn-block" data-id="' + u.id + '" onclick="adminBlock(this.dataset.id)">🚫 Blocca</button>'
+        : '<button class="btn-block" data-id="' + u.id + '" onclick="adminBlock(this.dataset.id)">🗑 Rimuovi</button>';
       return '<div class="user-card">' +
         '<div class="user-info">' +
           '<div class="email">' + (u.nome || u.email) + '</div>' +
@@ -1127,6 +1127,16 @@ function openDetail(id) {
   document.getElementById('d-stampa-costosa').textContent = v.stampa_costosa||'-';
   document.getElementById('d-prezzo').textContent  = v.prezzo_max||'-';
   document.getElementById('detail-overlay').style.display='flex';
+}
+
+
+function switchTab(tab) {
+  document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.auth-form').forEach(f => f.style.display = 'none');
+  const tabEl = document.querySelector('.auth-tab[data-tab="' + tab + '"]');
+  const formEl = document.getElementById('form-' + tab);
+  if (tabEl) tabEl.classList.add('active');
+  if (formEl) formEl.style.display = 'block';
 }
 
 function showToast(msg, isError = false) {
