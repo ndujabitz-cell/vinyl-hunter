@@ -199,7 +199,7 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
     <div class="auth-sub">Cataloga la tua collezione di vinili</div>
     <div class="auth-card">
       <div class="auth-tabs">
-        <button class="auth-tab active" onclick="switchTab('login')">Accedi</button>
+        <button class="auth-tab active" data-tab="login" onclick="switchTab('login')">Accedi</button>
         <button class="auth-tab" onclick="switchTab('register')">Registrati</button>
       </div>
       <div id="form-login">
@@ -1151,12 +1151,17 @@ function openDetail(id) {
 
 
 function switchTab(tab) {
-  document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.auth-form').forEach(f => f.style.display = 'none');
-  const tabEl = document.querySelector('.auth-tab[data-tab="' + tab + '"]');
-  const formEl = document.getElementById('form-' + tab);
-  if (tabEl) tabEl.classList.add('active');
-  if (formEl) formEl.style.display = 'block';
+  // Aggiorna stile pulsanti
+  document.querySelectorAll('.auth-tab').forEach(function(t) {
+    t.classList.remove('active');
+    var dtab = t.getAttribute('data-tab') || (t.textContent.trim() === 'Accedi' ? 'login' : 'register');
+    if (dtab === tab) t.classList.add('active');
+  });
+  // Mostra/nascondi form
+  var fLogin = document.getElementById('form-login');
+  var fReg   = document.getElementById('form-register');
+  if (fLogin) fLogin.style.display = tab === 'login' ? 'block' : 'none';
+  if (fReg)   fReg.style.display   = tab === 'register' ? 'block' : 'none';
 }
 
 function showToast(msg, isError = false) {
