@@ -509,9 +509,16 @@ function setNav(id) {
   document.getElementById(id).classList.add('active');
 }
 
+let _isScanning = false;
+
 async function handlePhoto(event) {
   const file = event.target.files[0];
   if (!file) return;
+  if (_isScanning) {
+    event.target.value = '';
+    return;
+  }
+  _isScanning = true;
   const reader = new FileReader();
   reader.onload = e => {
     const img = document.getElementById('preview-img');
@@ -552,6 +559,7 @@ async function handlePhoto(event) {
   } catch(e) { showToast(e.message, true); }
   document.getElementById('loading').style.display = 'none';
   event.target.value = '';
+  _isScanning = false;
 }
 
 async function confirmVinyl() {
@@ -1071,30 +1079,30 @@ async function saveDetailEdit() {
 
 // ── ADMIN ────────────────────────────────────────────────────────────────────
 async function loadAdminUsers() {
-  const el = document.getElementById('admin-user-list');
+  var el = document.getElementById('admin-user-list');
   el.innerHTML = '<p style="color:#aaa">Caricamento...</p>';
   try {
-    const r = await fetch('/api/admin/users?token=' + encodeURIComponent(STATE.token));
-    const users = await r.json();
+    var r = await fetch('/api/admin/users?token=' + encodeURIComponent(STATE.token));
+    var users = await r.json();
     if (!users.length) { el.innerHTML = '<p style="color:#aaa">Nessun utente</p>'; return; }
-    el.innerHTML = users.map(u => {
-      const badge = u.approved
+    var html = '';
+    for (var i = 0; i < users.length; i++) {
+      var u = users[i];
+      var badge = u.approved
         ? '<span class="badge-approved">Approvato</span>'
         : '<span class="badge-pending">In attesa</span>';
-      const btnApprove = !u.approved
-        ? '<button class="btn-approve" data-id="' + u.id + '" onclick="adminApprove(this.dataset.id)">✅ Approva</button>'
-        : '';
-      const btnBlock = u.approved
-        ? '<button class="btn-block" data-id="' + u.id + '" onclick="adminBlock(this.dataset.id)">🚫 Blocca</button>'
-        : '<button class="btn-block" data-id="' + u.id + '" onclick="adminBlock(this.dataset.id)">🗑 Rimuovi</button>';
-      return '<div class="user-card">' +
-        '<div class="user-info">' +
-          '<div class="email">' + (u.nome || u.email) + '</div>' +
-          '<div class="meta">' + u.email + ' · ' + new Date(u.created_at).toLocaleDateString('it-IT') + '</div>' +
-        '</div>' +
-        badge + btnApprove + btnBlock +
-      '</div>';
-    }).join('');
+      var uid = String(u.id);
+      var btnA = u.approved ? '' : '<button class="btn-approve" onclick="adminApprove('' + uid + '')">&#10003; Approva</button>';
+      var btnB = u.approved
+        ? '<button class="btn-block" onclick="adminBlock('' + uid + '')">Blocca</button>'
+        : '<button class="btn-block" onclick="adminBlock('' + uid + '')">Rimuovi</button>';
+      html += '<div class="user-card">'
+        + '<div class="user-info">'
+        + '<div class="email">' + (u.nome || u.email) + '</div>'
+        + '<div class="meta">' + u.email + '</div>'
+        + '</div>' + badge + btnA + btnB + '</div>';
+    }
+    el.innerHTML = html;
   } catch(e) {
     el.innerHTML = '<p style="color:#e94560">Errore: ' + e.message + '</p>';
   }
