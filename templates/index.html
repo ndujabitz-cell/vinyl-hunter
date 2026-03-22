@@ -438,11 +438,7 @@ window.onload = () => {
   }
 };
 
-function switchTab(tab) {
-  document.querySelectorAll('.auth-tab').forEach((t,i) => t.classList.toggle('active', (tab==='login'&&i===0)||(tab==='register'&&i===1)));
-  document.getElementById('form-login').style.display = tab === 'login' ? 'block' : 'none';
-  document.getElementById('form-register').style.display = tab === 'register' ? 'block' : 'none';
-}
+
 
 async function doLogin() {
   const email = document.getElementById('login-email').value.trim();
@@ -559,7 +555,23 @@ async function handlePhoto(event) {
   } catch(e) { showToast(e.message, true); }
   document.getElementById('loading').style.display = 'none';
   event.target.value = '';
-  _isScanning = false;
+  // Cooldown 15s per rispettare limite 5 RPM Gemini
+  const scanBtn = document.getElementById('file-input');
+  const camBox  = document.getElementById('camera-box');
+  const scanBtnIcon = document.querySelector('.scan-btn');
+  let countdown = 13;
+  if (scanBtnIcon) { scanBtnIcon.textContent = '⏳ ' + countdown + 's'; scanBtnIcon.disabled = true; }
+  if (camBox) camBox.style.pointerEvents = 'none';
+  const timer = setInterval(() => {
+    countdown--;
+    if (scanBtnIcon) scanBtnIcon.textContent = '⏳ ' + countdown + 's';
+    if (countdown <= 0) {
+      clearInterval(timer);
+      if (scanBtnIcon) { scanBtnIcon.textContent = '📷'; scanBtnIcon.disabled = false; }
+      if (camBox) camBox.style.pointerEvents = 'auto';
+      _isScanning = false;
+    }
+  }, 1000);
 }
 
 async function confirmVinyl() {
