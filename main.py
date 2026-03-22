@@ -605,7 +605,7 @@ async def scan_label(file: UploadFile = File(...)):
         try:
             b64  = base64.b64encode(content).decode()
             mime = file.content_type or "image/jpeg"
-            url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
+            url  = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_KEY}"
             prompt = """Sei un esperto di dischi vinile. Analizza questa etichetta e rispondi SOLO con JSON valido senza markdown:
 {"artista":"","titolo":"","formato":"","stile":"","anno":"","etichetta":"","stampa":"","barcode":"","lato":""}
 
