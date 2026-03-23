@@ -719,7 +719,8 @@ async def add_vinyl(v: VinylData):
             }
         )
     if r.status_code not in (200, 201):
-        raise HTTPException(400, f"Errore salvataggio: {r.status_code}")
+        print(f"SAVE ERROR {r.status_code}: {r.text[:300]}")
+        raise HTTPException(400, f"Errore salvataggio: {r.status_code} - {r.text[:200]}")
     return {"status": "ok"}
 
 @app.get("/api/vinili/{user_id}")
