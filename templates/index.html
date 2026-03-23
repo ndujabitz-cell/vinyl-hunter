@@ -505,16 +505,9 @@ function setNav(id) {
   document.getElementById(id).classList.add('active');
 }
 
-let _isScanning = false;
-
 async function handlePhoto(event) {
   const file = event.target.files[0];
   if (!file) return;
-  if (_isScanning) {
-    event.target.value = '';
-    return;
-  }
-  _isScanning = true;
   const reader = new FileReader();
   reader.onload = e => {
     const img = document.getElementById('preview-img');
@@ -569,7 +562,6 @@ async function handlePhoto(event) {
       clearInterval(timer);
       if (scanBtnIcon) { scanBtnIcon.textContent = '📷'; scanBtnIcon.disabled = false; }
       if (camBox) camBox.style.pointerEvents = 'auto';
-      _isScanning = false;
     }
   }, 1000);
 }
