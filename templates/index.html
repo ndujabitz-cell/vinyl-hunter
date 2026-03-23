@@ -199,8 +199,8 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
     <div class="auth-sub">Cataloga la tua collezione di vinili</div>
     <div class="auth-card">
       <div class="auth-tabs">
-        <button class="auth-tab active" data-tab="login" onclick="switchTab('login')">Accedi</button>
-        <button class="auth-tab" onclick="switchTab('register')">Registrati</button>
+        <button class="auth-tab active" id="tab-login">Accedi</button>
+        <button class="auth-tab" id="tab-register">Registrati</button>
       </div>
       <div id="form-login">
         <div class="input-group"><label>Email</label><input type="email" id="login-email" placeholder="tua@email.com"></div>
@@ -1151,18 +1151,19 @@ function openDetail(id) {
 
 
 function switchTab(tab) {
-  // Aggiorna stile pulsanti
-  document.querySelectorAll('.auth-tab').forEach(function(t) {
-    t.classList.remove('active');
-    var dtab = t.getAttribute('data-tab') || (t.textContent.trim() === 'Accedi' ? 'login' : 'register');
-    if (dtab === tab) t.classList.add('active');
-  });
-  // Mostra/nascondi form
-  var fLogin = document.getElementById('form-login');
-  var fReg   = document.getElementById('form-register');
-  if (fLogin) fLogin.style.display = tab === 'login' ? 'block' : 'none';
-  if (fReg)   fReg.style.display   = tab === 'register' ? 'block' : 'none';
+  document.getElementById('form-login').style.display    = tab === 'login'    ? 'block' : 'none';
+  document.getElementById('form-register').style.display = tab === 'register' ? 'block' : 'none';
+  document.getElementById('tab-login').classList.toggle('active',    tab === 'login');
+  document.getElementById('tab-register').classList.toggle('active', tab === 'register');
 }
+
+// Bind pulsanti tab con addEventListener (più compatibile con Android)
+document.addEventListener('DOMContentLoaded', function() {
+  var tl = document.getElementById('tab-login');
+  var tr = document.getElementById('tab-register');
+  if (tl) tl.addEventListener('click', function() { switchTab('login'); });
+  if (tr) tr.addEventListener('click', function() { switchTab('register'); });
+});
 
 function showToast(msg, isError = false) {
   const t = document.getElementById('toast');
