@@ -199,8 +199,8 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: #1a1a2e; colo
     <div class="auth-sub">Cataloga la tua collezione di vinili</div>
     <div class="auth-card">
       <div class="auth-tabs">
-        <button class="auth-tab active" id="tab-login">Accedi</button>
-        <button class="auth-tab" id="tab-register">Registrati</button>
+        <button class="auth-tab active" onclick="switchTab('login')">Accedi</button>
+        <button class="auth-tab" onclick="switchTab('register')">Registrati</button>
       </div>
       <div id="form-login">
         <div class="input-group"><label>Email</label><input type="email" id="login-email" placeholder="tua@email.com"></div>
@@ -438,7 +438,11 @@ window.onload = () => {
   }
 };
 
-
+function switchTab(tab) {
+  document.querySelectorAll('.auth-tab').forEach((t,i) => t.classList.toggle('active', (tab==='login'&&i===0)||(tab==='register'&&i===1)));
+  document.getElementById('form-login').style.display = tab === 'login' ? 'block' : 'none';
+  document.getElementById('form-register').style.display = tab === 'register' ? 'block' : 'none';
+}
 
 async function doLogin() {
   const email = document.getElementById('login-email').value.trim();
@@ -505,9 +509,16 @@ function setNav(id) {
   document.getElementById(id).classList.add('active');
 }
 
+let _isScanning = false;
+
 async function handlePhoto(event) {
   const file = event.target.files[0];
   if (!file) return;
+  if (_isScanning) {
+    event.target.value = '';
+    return;
+  }
+  _isScanning = true;
   const reader = new FileReader();
   reader.onload = e => {
     const img = document.getElementById('preview-img');
@@ -548,22 +559,7 @@ async function handlePhoto(event) {
   } catch(e) { showToast(e.message, true); }
   document.getElementById('loading').style.display = 'none';
   event.target.value = '';
-  // Cooldown 15s per rispettare limite 5 RPM Gemini
-  const scanBtn = document.getElementById('file-input');
-  const camBox  = document.getElementById('camera-box');
-  const scanBtnIcon = document.querySelector('.scan-btn');
-  let countdown = 13;
-  if (scanBtnIcon) { scanBtnIcon.textContent = '⏳ ' + countdown + 's'; scanBtnIcon.disabled = true; }
-  if (camBox) camBox.style.pointerEvents = 'none';
-  const timer = setInterval(() => {
-    countdown--;
-    if (scanBtnIcon) scanBtnIcon.textContent = '⏳ ' + countdown + 's';
-    if (countdown <= 0) {
-      clearInterval(timer);
-      if (scanBtnIcon) { scanBtnIcon.textContent = '📷'; scanBtnIcon.disabled = false; }
-      if (camBox) camBox.style.pointerEvents = 'auto';
-    }
-  }, 1000);
+  _isScanning = false;
 }
 
 async function confirmVinyl() {
@@ -1143,19 +1139,13 @@ function openDetail(id) {
 
 
 function switchTab(tab) {
-  document.getElementById('form-login').style.display    = tab === 'login'    ? 'block' : 'none';
-  document.getElementById('form-register').style.display = tab === 'register' ? 'block' : 'none';
-  document.getElementById('tab-login').classList.toggle('active',    tab === 'login');
-  document.getElementById('tab-register').classList.toggle('active', tab === 'register');
+  document.querySelectorAll('.auth-tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.auth-form').forEach(f => f.style.display = 'none');
+  const tabEl = document.querySelector('.auth-tab[data-tab="' + tab + '"]');
+  const formEl = document.getElementById('form-' + tab);
+  if (tabEl) tabEl.classList.add('active');
+  if (formEl) formEl.style.display = 'block';
 }
-
-// Bind pulsanti tab con addEventListener (più compatibile con Android)
-document.addEventListener('DOMContentLoaded', function() {
-  var tl = document.getElementById('tab-login');
-  var tr = document.getElementById('tab-register');
-  if (tl) tl.addEventListener('click', function() { switchTab('login'); });
-  if (tr) tr.addEventListener('click', function() { switchTab('register'); });
-});
 
 function showToast(msg, isError = false) {
   const t = document.getElementById('toast');
