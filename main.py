@@ -940,14 +940,14 @@ async def _build_excel_response(user_id: str, token: str):
 
     out = io.BytesIO()
     wb.save(out); out.seek(0)
-  return StreamingResponse(
-    io.BytesIO(out.getvalue()),  # Nuovo BytesIO!
-    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    headers={
-        "Content-Disposition": "attachment; filename=CatalogoVinili.xlsx",
-        "Cache-Control": "no-cache"
-    }
-)
+    return Response(
+        content=out.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": "attachment; filename=Catalogo_Vinili.xlsx",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+        }
+    )
 
 # ── Enrich batch ──────────────────────────────────────────────────────────────
 
